@@ -1,0 +1,40 @@
+body {
+  margin: 0;
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: 'IBM Plex Mono', source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+.page-content {
+  padding: 2rem;
+  min-height: calc(100vh - 3rem);
+}
+
+.page-title {
+  font-size: 2.5rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+.page-description {
+  font-size: 1.125rem;
+  color: #c6c6c6;
+  max-width: 800px;
+}
+
+.feature-tile {
+  transition: transform 0.2s ease-in-out;
+}
+
+.feature-tile:hover {
+  transform: translateY(-4px);
+}
+
+// Made with Bob

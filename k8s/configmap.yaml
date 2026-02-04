@@ -1,0 +1,18 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: excel-ai-processor-config
+  namespace: content-studio-platform
+  labels:
+    app: excel-ai-processor
+data:
+  # WatsonX.ai Configuration
+  WATSON_URL: "https://us-south.ml.cloud.ibm.com/ml/v1/text/chat?version=2023-05-29"
+  WATSON_TEXT_MODEL: "meta-llama/llama-3-3-70b-instruct"
+  
+  # Application Configuration
+  NODE_ENV: "production"
+  MAX_FILE_SIZE: "10485760"
+  ALLOWED_FILE_TYPES: ".xlsx,.xls"
+
+# Made with Bob

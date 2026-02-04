@@ -1,0 +1,21 @@
+kind: Route
+apiVersion: route.openshift.io/v1
+metadata:
+  name: excel-ai-processor
+  namespace: content-studio-platform
+  labels:
+    app: excel-ai-processor
+spec:
+  host: excel-ai-processor-np.dinero.techzone.ibm.com
+  to:
+    kind: Service
+    name: excel-ai-processor
+    weight: 100
+  port:
+    targetPort: oauth
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+
+# Made with Bob

@@ -1,0 +1,40 @@
+kind: fullstack
+public: true
+port: 3000
+oauth2: auto
+backend:
+  path: api
+  port: 3000
+env:
+  # Instana SaaS Configuration
+  INSTANA_REPORTING_URL: "https://ibmdevsandbox-instanaibm.instana.io"
+  INSTANA_AGENT_KEY:
+    secretKeyRef:
+      name: instana-secrets
+      key: agent-key
+  
+  # WatsonX.ai Configuration
+  WATSON_URL: "https://us-south.ml.cloud.ibm.com/ml/v1/text/chat?version=2023-05-29"
+  IBM_WATSONX_API_KEY:
+    secretKeyRef:
+      name: watsonx-secrets
+      key: api-key
+  IBM_WATSONX_PROJECT_ID:
+    secretKeyRef:
+      name: watsonx-secrets
+      key: project-id
+  WATSON_TEXT_MODEL: "meta-llama/llama-3-3-70b-instruct"
+  
+  # Application Configuration
+  NODE_ENV: "production"
+  PORT: "3000"
+  MAX_FILE_SIZE: "10485760"
+  ALLOWED_FILE_TYPES: ".xlsx,.xls"
+
+oauth2_args:
+  # Skip authentication for API endpoints
+  - "--skip-auth-regex=^/api/.*"
+  # Skip the provider button for seamless SSO
+  - "--skip-provider-button=true"
+
+# Made with Bob

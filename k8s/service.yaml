@@ -1,0 +1,27 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: excel-ai-processor
+  namespace: content-studio-platform
+  labels:
+    app: excel-ai-processor
+spec:
+  ports:
+    - name: oauth
+      protocol: TCP
+      port: 4180
+      targetPort: 4180
+    - name: backend
+      protocol: TCP
+      port: 3000
+      targetPort: 3000
+    - name: frontend
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+  selector:
+    app: excel-ai-processor
+  type: ClusterIP
+  sessionAffinity: None
+
+# Made with Bob

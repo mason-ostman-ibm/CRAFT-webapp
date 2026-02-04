@@ -1,0 +1,158 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: excel-ai-processor
+  namespace: content-studio-platform
+  labels:
+    app: excel-ai-processor
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: excel-ai-processor
+  template:
+    metadata:
+      labels:
+        app: excel-ai-processor
+    spec:
+      containers:
+        # Frontend Container (React + Vite)
+        - name: frontend
+          image: 'image-registry.openshift-image-registry.svc:5000/content-studio-platform/excel-ai-processor:latest'
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+              name: frontend
+          env:
+            - name: PORT
+              value: '8080'
+          envFrom:
+            - configMapRef:
+                name: excel-ai-processor-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          imagePullPolicy: Always
+        
+        # Backend API Server Container (Express.js)
+        - name: backend
+          image: 'image-registry.openshift-image-registry.svc:5000/content-studio-platform/excel-ai-processor:latest'
+          command: ["node", "api/server.js"]
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+              name: backend
+          env:
+            - name: PORT
+              value: '3000'
+            - name: NODE_ENV
+              value: 'production'
+            - name: INSTANA_REPORTING_URL
+              value: 'https://ibmdevsandbox-instanaibm.instana.io'
+            - name: INSTANA_AGENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: instana-secrets
+                  key: agent-key
+            - name: IBM_WATSONX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: watsonx-secrets
+                  key: api-key
+            - name: IBM_WATSONX_PROJECT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: watsonx-secrets
+                  key: project-id
+          envFrom:
+            - configMapRef:
+                name: excel-ai-processor-config
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          imagePullPolicy: Always
+        
+        # OAuth2 Proxy Container
+        - name: oauth2-proxy
+          image: 'quay.io/oauth2-proxy/oauth2-proxy:v7.6.0'
+          ports:
+            - containerPort: 4180
+              protocol: TCP
+              name: oauth
+          envFrom:
+            - secretRef:
+                name: excel-ai-processor-secrets
+          args:
+            - '--provider=oidc'
+            - '--oidc-issuer-url=https://login.w3.ibm.com/oidc/endpoint/default'
+            - '--scope=openid email profile'
+            - '--upstream=http://localhost:8080'
+            - '--http-address=0.0.0.0:4180'
+            - '--redirect-url=https://excel-ai-processor-np.dinero.techzone.ibm.com/oauth2/callback'
+            - '--set-authorization-header=true'
+            - '--pass-access-token=true'
+            - '--set-xauthrequest=true'
+            - '--email-domain=*'
+            - '--skip-provider-button=true'
+            - '--skip-auth-regex=^/api/.*'
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          imagePullPolicy: Always
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      securityContext: {}
+      schedulerName: default-scheduler
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
+
+# Made with Bob
