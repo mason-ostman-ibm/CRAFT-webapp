@@ -23,6 +23,7 @@ const MainLayout: React.FC = () => {
         <HeaderNavigation aria-label="Main Navigation">
           <HeaderMenuItem href="/">Home</HeaderMenuItem>
           <HeaderMenuItem href="/process">Process Files</HeaderMenuItem>
+          <HeaderMenuItem href="/delta">Delta Tool</HeaderMenuItem>
           <HeaderMenuItem href="/validate">Validate</HeaderMenuItem>
           <HeaderMenuItem href="/settings">Settings</HeaderMenuItem>
         </HeaderNavigation>

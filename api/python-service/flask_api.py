@@ -56,6 +56,9 @@ def process_excel():
     
     Returns JSON with processing results
     """
+    input_path = None
+    output_path = None
+
     try:
         # Check if file is present
         if 'file' not in request.files:
@@ -80,36 +83,55 @@ def process_excel():
         # Process the document
         result = process_document(input_path, context=context)
         
-        # Read the output file
-        with open(result['output_path'], 'rb') as f:
-            output_data = f.read()
-        
-        # Clean up temp files
-        os.unlink(input_path)
-        output_path = result['output_path']
-        
-        # Save output to temp location for download
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_output:
-            temp_output.write(output_data)
-            download_path = temp_output.name
-        
-        # Clean up the original output
-        if os.path.exists(output_path):
-            os.unlink(output_path)
-        
-        return jsonify({
-            "success": True,
-            "download_path": download_path,
-            "filename": f"{Path(file.filename).stem}_completed.xlsx",
-            "sheets_processed": result['sheets_processed'],
-            "total_sheets": result['total_sheets'],
-            "questions_answered": result['questions_answered'],
-            "details": result['details']
-        })
+        # Check if processing was successful
+        if not result.get('success', False):
+            error_msg = result.get('error', 'Unknown processing error')
+            logger.error(f"Processing failed: {error_msg}")
+            return jsonify({
+                "error": error_msg,
+                "details": result.get('errors', [])
+            }), 500
+
+        # Read the output file and return it directly
+        output_path = result.get('output_path')
+        if not output_path or not os.path.exists(output_path):
+            return jsonify({"error": "Output file not generated"}), 500
+
+        # Return the file directly
+        output_filename = f"{Path(file.filename).stem}_completed.xlsx"
+
+        try:
+            return send_file(
+                output_path,
+                as_attachment=True,
+                download_name=output_filename,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+        finally:
+            # Schedule cleanup after file is sent
+            try:
+                os.unlink(output_path)
+                logger.info(f"Cleaned up output file: {output_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up output file: {e}")
     
     except Exception as e:
         logger.error(f"Error processing file: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+    
+    finally:
+        # Clean up temp files
+        if input_path and os.path.exists(input_path):
+            try:
+                os.unlink(input_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up input file: {e}")
+        
+        if output_path and os.path.exists(output_path):
+            try:
+                os.unlink(output_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up output file: {e}")
 
 
 @app.route('/download/<path:filepath>', methods=['GET'])
@@ -156,6 +178,8 @@ def detect_columns():
     
     Returns JSON with detected column names
     """
+    temp_path = None
+    
     try:
         if 'file' not in request.files:
             return jsonify({"error": "No file provided"}), 400
@@ -175,15 +199,11 @@ def detect_columns():
         df = pd.read_excel(temp_path, sheet_name=sheet_name)
         
         if df.empty:
-            os.unlink(temp_path)
             return jsonify({"error": "Sheet is empty"}), 400
         
         # Detect columns
         model = get_model()
         question_col, answer_col = detect_qa_columns_in_sheet(df, model)
-        
-        # Clean up
-        os.unlink(temp_path)
         
         if not question_col or not answer_col:
             return jsonify({"error": "Could not detect Q&A columns"}), 400
@@ -197,11 +217,288 @@ def detect_columns():
     except Exception as e:
         logger.error(f"Error detecting columns: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+    
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp file: {e}")
 
+
+# ============================================================================
+# Delta Tool API Endpoints
+# ============================================================================
+
+try:
+    from delta_service import delta_service
+    DELTA_SERVICE_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Delta service not available: {e}")
+    DELTA_SERVICE_AVAILABLE = False
+    delta_service = None
+
+@app.route('/delta/status', methods=['GET'])
+def delta_status():
+    """Check Delta Service status"""
+    if not DELTA_SERVICE_AVAILABLE or delta_service is None:
+        return jsonify({
+            "available": False,
+            "service": "Delta Tool",
+            "message": "Delta service module not loaded"
+        })
+    
+    try:
+        return jsonify({
+            "available": delta_service.is_available(),
+            "service": "Delta Tool",
+            "astradb_configured": os.getenv("ASTRA_DB_API_ENDPOINT") is not None,
+            "llm_verification_enabled": os.getenv("DELTA_ENABLE_LLM_VERIFICATION", "true").lower() == "true",
+            "similarity_threshold": float(os.getenv("DELTA_SIMILARITY_THRESHOLD", "0.85"))
+        })
+    except Exception as e:
+        logger.error(f"Error checking delta status: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/delta/upload-baseline', methods=['POST'])
+def upload_baseline():
+    """Upload and ingest baseline questionnaire"""
+    temp_path = None
+
+    try:
+        # Debug logging
+        logger.info(f"Upload baseline request received")
+        logger.info(f"  Request files: {list(request.files.keys())}")
+        logger.info(f"  Request form: {dict(request.form)}")
+        logger.info(f"  Content type: {request.content_type}")
+
+        if not DELTA_SERVICE_AVAILABLE or delta_service is None:
+            logger.error("Delta service not available or not loaded")
+            return jsonify({
+                "error": "Delta Service not available",
+                "message": "Delta service module not loaded"
+            }), 503
+
+        if 'file' not in request.files:
+            logger.error(f"No 'file' in request.files. Available keys: {list(request.files.keys())}")
+            return jsonify({"error": "No file provided"}), 400
+
+        file = request.files['file']
+        description = request.form.get('description', '')
+        user_email = request.headers.get('x-forwarded-email', 'dev.user@ibm.com')
+
+        logger.info(f"  File: {file.filename if file else 'None'}")
+        logger.info(f"  Description: {description}")
+        logger.info(f"  User: {user_email}")
+
+        if file.filename == '':
+            logger.error("File filename is empty")
+            return jsonify({"error": "No file selected"}), 400
+
+        if not file.filename.endswith('.xlsx'):
+            logger.error(f"Invalid file format: {file.filename}")
+            return jsonify({"error": "File must be .xlsx format"}), 400
+        
+        if not delta_service.is_available():
+            return jsonify({
+                "error": "Delta Service not available",
+                "message": "AstraDB credentials not configured"
+            }), 503
+        
+        # Save uploaded file to temp location
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
+            file.save(temp_file.name)
+            temp_path = temp_file.name
+        
+        logger.info(f"Ingesting baseline: {file.filename}")
+
+        # Ingest baseline (clears existing baseline)
+        result = delta_service.ingest_baseline(temp_path, user_email, description)
+        
+        return jsonify(result)
+    
+    except Exception as e:
+        logger.error(f"Error uploading baseline: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+    
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp file: {e}")
+
+
+@app.route('/delta/process', methods=['POST'])
+def process_delta():
+    """Process current year questionnaire against baseline"""
+    temp_path = None
+    
+    try:
+        if not DELTA_SERVICE_AVAILABLE or delta_service is None:
+            return jsonify({
+                "error": "Delta Service not available",
+                "message": "Delta service module not loaded"
+            }), 503
+        
+        if 'file' not in request.files:
+            return jsonify({"error": "No file provided"}), 400
+        
+        file = request.files['file']
+        similarity_threshold = request.form.get('similarity_threshold')
+        use_llm = request.form.get('use_llm', '').lower() == 'true'
+        
+        if file.filename == '':
+            return jsonify({"error": "No file selected"}), 400
+        
+        if not file.filename.endswith('.xlsx'):
+            return jsonify({"error": "File must be .xlsx format"}), 400
+        
+        if not delta_service.is_available():
+            return jsonify({
+                "error": "Delta Service not available",
+                "message": "AstraDB credentials not configured"
+            }), 503
+        
+        # Save uploaded file to temp location
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
+            file.save(temp_file.name)
+            temp_path = temp_file.name
+        
+        logger.info(f"Processing delta: {file.filename} (LLM mode: {use_llm})")
+
+        # Process delta
+        threshold = float(similarity_threshold) if similarity_threshold else None
+        result = delta_service.process_delta(temp_path, threshold, use_llm=use_llm)
+        
+        # Store output file path in a simple in-memory dict with the filename as key
+        # In production, use Redis or a proper cache
+        output_filename = result['output_filename']
+        if not hasattr(app, 'delta_files'):
+            app.delta_files = {}
+        app.delta_files[output_filename] = result['output_path']
+        
+        # Return JSON with metadata and download endpoint
+        return jsonify({
+            "success": True,
+            "processing_summary": result['processing_summary'],
+            "matches": result['matches'],
+            "unmatched": result['unmatched'],
+            "download_filename": output_filename
+        })
+    
+    except Exception as e:
+        logger.error(f"Error processing delta: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+    
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp file: {e}")
+
+
+@app.route('/delta/download/<filename>', methods=['GET'])
+def download_delta_file(filename):
+    """Download processed delta file by filename"""
+    try:
+        # Get file path from in-memory storage
+        if not hasattr(app, 'delta_files') or filename not in app.delta_files:
+            return jsonify({"error": "File not found or expired"}), 404
+        
+        filepath = app.delta_files[filename]
+        
+        if not os.path.exists(filepath):
+            # Clean up stale entry
+            del app.delta_files[filename]
+            return jsonify({"error": "File not found"}), 404
+        
+        response = send_file(
+            filepath,
+            as_attachment=True,
+            download_name=filename,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        
+        # Clean up file after sending
+        @response.call_on_close
+        def cleanup():
+            try:
+                if os.path.exists(filepath):
+                    os.unlink(filepath)
+                    logger.info(f"Cleaned up temp file: {filepath}")
+                # Remove from cache
+                if hasattr(app, 'delta_files') and filename in app.delta_files:
+                    del app.delta_files[filename]
+            except Exception as e:
+                logger.warning(f"Failed to clean up {filepath}: {e}")
+        
+        return response
+    
+    except Exception as e:
+        logger.error(f"Error downloading delta file: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/delta/baseline-info', methods=['GET'])
+def get_baseline_info():
+    """Get information about the current baseline"""
+    try:
+        if not DELTA_SERVICE_AVAILABLE or delta_service is None:
+            return jsonify({
+                "available": False,
+                "baseline": None,
+                "message": "Delta Service not configured"
+            })
+
+        if not delta_service.is_available():
+            return jsonify({
+                "available": False,
+                "baseline": None,
+                "message": "Delta Service not configured"
+            })
+
+        baseline_info = delta_service.get_baseline_info()
+
+        return jsonify({
+            "available": True,
+            "baseline": baseline_info
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting baseline info: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/delta/baseline', methods=['DELETE'])
+def clear_baseline():
+    """Clear the baseline collection"""
+    try:
+        if not DELTA_SERVICE_AVAILABLE or delta_service is None:
+            return jsonify({"error": "Delta Service not available"}), 503
+
+        if not delta_service.is_available():
+            return jsonify({"error": "Delta Service not available"}), 503
+
+        result = delta_service.clear_baseline()
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Error clearing baseline: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# Application Entry Point
+# ============================================================================
 
 if __name__ == '__main__':
     port = int(os.getenv('PYTHON_SERVICE_PORT', 5000))
     logger.info(f"Starting Python Document Processor API on port {port}")
+    logger.info(f"Delta Service Available: {DELTA_SERVICE_AVAILABLE}")
     app.run(host='0.0.0.0', port=port, debug=False)
 
 # Made with Bob
+

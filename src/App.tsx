@@ -6,6 +6,7 @@ import { Theme } from "@carbon/react";
 import MainLayout from "./layout/MainLayout";
 import HomePage from "./pages/HomePage";
 import ProcessPage from "./pages/ProcessPage";
+import DeltaPage from "./pages/DeltaPage";
 import ValidationPage from "./pages/ValidationPage";
 import SettingsPage from "./pages/SettingsPage";
 import NotFound from "./pages/NotFound";
@@ -22,6 +23,7 @@ const App: React.FC = () => (
           <Route path="/" element={<MainLayout />}>
             <Route index element={<HomePage />} />
             <Route path="process" element={<ProcessPage />} />
+            <Route path="delta" element={<DeltaPage />} />
             <Route path="validate" element={<ValidationPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>

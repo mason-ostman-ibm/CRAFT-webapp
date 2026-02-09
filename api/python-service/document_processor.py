@@ -10,12 +10,19 @@ from openpyxl.styles import Alignment
 import openpyxl.utils
 import os
 import re
+import warnings
+import zipfile
+import xml.etree.ElementTree as ET
+from typing import List, Tuple
 from ibm_watsonx_ai import Credentials
 from ibm_watsonx_ai.foundation_models import ModelInference
 from dotenv import load_dotenv
 from astrapy import DataAPIClient
 from sentence_transformers import SentenceTransformer
 import logging
+
+# Suppress benign openpyxl warnings about invalid specifications in Excel files
+warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -44,26 +51,36 @@ else:
 
 
 def initialize_model():
-    """Initialize the WatsonX LLM model"""
+    """Initialize the WatsonX.ai LLM model"""
+    # Get credentials from environment
+    watson_url = os.getenv("WATSON_URL")
+    api_key = os.getenv("IBM_WATSONX_API_KEY")
+    project_id = os.getenv("IBM_WATSONX_PROJECT_ID")
+    space_id = os.getenv("SPACE_ID", "")
+    model_id = os.getenv("WATSON_TEXT_MODEL")
+
+    # Create credentials
     credentials = Credentials(
-        url=os.getenv("WATSON_URL", "https://us-south.ml.cloud.ibm.com"),
-        api_key=os.getenv("IBM_WATSONX_API_KEY")
+        url=watson_url,
+        api_key=api_key
     )
 
-    project_id = os.getenv("IBM_WATSONX_PROJECT_ID")
-    model_id = os.getenv("WATSON_TEXT_MODEL", "meta-llama/llama-3-3-70b-instruct")
-
+    # Model parameters
     parameters = {
-        "temperature": 0.7,
+        "frequency_penalty": 0,
         "max_tokens": 2000,
+        "presence_penalty": 0,
+        "temperature": 0.7,
         "top_p": 1
     }
 
+    # Initialize model
     model = ModelInference(
         model_id=model_id,
         params=parameters,
         credentials=credentials,
-        project_id=project_id
+        project_id=project_id,
+        space_id=space_id if space_id else None
     )
 
     logger.info(f"✓ Model initialized: {model_id}")
@@ -73,23 +90,34 @@ def initialize_model():
 def detect_qa_columns_in_sheet(df, model):
     """
     Use LLM to intelligently detect which columns contain questions and answers
-    
+
     Args:
         df: pandas DataFrame of the sheet
         model: Initialized LLM model
-    
+
     Returns:
-        tuple: (question_column_name, answer_column_name) or (None, None)
+        tuple: (question_column_index, answer_column_index) or (None, None) - 1-based indices
     """
+    # Get available column names
+    column_names = list(df.columns)
+
+    # If there are only 2 columns, just use them
+    if len(column_names) == 2:
+        logger.info(f"✓ Auto-detected 2 columns - Q: {column_names[0]} (col 1), A: {column_names[1]} (col 2)")
+        return 1, 2
+
     sample_data = df.head(5).to_string()
 
-    prompt = f"""Given this spreadsheet data, identify which column contains questions and which contains answers.
+    prompt = f"""Given this spreadsheet data, identify which column NUMBER (1, 2, 3, etc.) contains questions and which contains answers.
 
+Available columns: {', '.join([f'{i+1}: {col}' for i, col in enumerate(column_names)])}
+
+Sample data:
 {sample_data}
 
-Respond in this exact format:
-Question column: [column name]
-Answer column: [column name]"""
+Respond in this exact format (use only the column NUMBER):
+Question column: [number]
+Answer column: [number]"""
 
     messages = [
         {
@@ -102,15 +130,21 @@ Answer column: [column name]"""
         response = model.chat(messages=messages)
         answer = response["choices"][0]["message"]["content"]
 
-        # Parse the response
-        question_match = re.search(r'Question column:\s*(.+)', answer)
-        answer_match = re.search(r'Answer column:\s*(.+)', answer)
+        # Parse the response - look for numbers
+        question_match = re.search(r'Question column:\s*(\d+)', answer)
+        answer_match = re.search(r'Answer column:\s*(\d+)', answer)
 
         if question_match and answer_match:
-            question_col = question_match.group(1).strip()
-            answer_col = answer_match.group(1).strip()
-            logger.info(f"✓ Detected columns - Q: {question_col}, A: {answer_col}")
-            return question_col, answer_col
+            question_col_idx = int(question_match.group(1))
+            answer_col_idx = int(answer_match.group(1))
+
+            # Validate indices
+            if 1 <= question_col_idx <= len(column_names) and 1 <= answer_col_idx <= len(column_names):
+                logger.info(f"✓ Detected columns - Q: {column_names[question_col_idx-1]} (col {question_col_idx}), A: {column_names[answer_col_idx-1]} (col {answer_col_idx})")
+                return question_col_idx, answer_col_idx
+            else:
+                logger.error(f"Invalid column indices detected: Q={question_col_idx}, A={answer_col_idx}")
+                return None, None
 
         return None, None
     except Exception as e:
@@ -246,6 +280,91 @@ Provide your answer:"""
         return f"Error: {str(e)}"
 
 
+def should_skip_sheet(sheet_name):
+    """
+    Determine if a sheet should be skipped (instruction sheets, empty sheets, etc.)
+
+    Args:
+        sheet_name: Name of the worksheet
+
+    Returns:
+        True if sheet should be skipped, False otherwise
+    """
+    if not sheet_name:
+        return True
+
+    sheet_lower = sheet_name.lower()
+
+    # Skip instruction/system sheets
+    skip_keywords = ['instruction', 'dv_sheet', 'legend']
+
+    return any(skip in sheet_lower for skip in skip_keywords)
+
+
+def get_sheet_names_xml(file_path) -> List[str]:
+    """
+    Get sheet names from Excel file using XML parser
+    Fallback method for files that openpyxl can't read properly
+
+    Args:
+        file_path: Path to Excel file
+
+    Returns:
+        List of sheet names
+    """
+    try:
+        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+            wb_xml = zip_ref.read('xl/workbook.xml').decode('utf-8')
+            sheet_info = re.findall(r'<sheet.*?name="([^"]+)"', wb_xml)
+            return sheet_info
+    except Exception:
+        return []
+
+
+def get_sheet_qa_data_pandas(file_path, sheet_name, question_col_name, answer_col_name):
+    """
+    Read Q&A data from a specific sheet using pandas
+
+    Args:
+        file_path: Path to Excel file
+        sheet_name: Name of the sheet to read
+        question_col_name: Name of question column
+        answer_col_name: Name of answer column
+
+    Returns:
+        List of tuples: [(row_num, question, has_answer), ...]
+    """
+    try:
+        df = pd.read_excel(file_path, sheet_name=sheet_name)
+
+        if df.empty or question_col_name not in df.columns or answer_col_name not in df.columns:
+            return []
+
+        qa_pairs = []
+        for idx, row in df.iterrows():
+            question = row.get(question_col_name)
+            answer = row.get(answer_col_name)
+
+            question_str = str(question).strip() if pd.notna(question) else ""
+            answer_str = str(answer).strip() if pd.notna(answer) else ""
+
+            # Skip empty questions
+            if not question_str or question_str == 'nan':
+                continue
+
+            # Check if answer exists
+            has_answer = bool(answer_str and answer_str not in ['nan', 'unanswered', ''])
+
+            # Excel row number is pandas index + 2 (header + 0-based indexing)
+            qa_pairs.append((idx + 2, question_str, has_answer))
+
+        return qa_pairs
+
+    except Exception as e:
+        logger.error(f"Error reading sheet with pandas: {e}")
+        return []
+
+
 def process_document(file_path, output_path=None, context=""):
     """
     Main function to process Excel document with RAG-powered answers
@@ -258,143 +377,292 @@ def process_document(file_path, output_path=None, context=""):
     Returns:
         dict: Processing results with statistics
     """
-    logger.info(f"{'='*60}")
-    logger.info("EXCEL AI PROCESSOR - Document Processing")
-    logger.info(f"{'='*60}")
-
-    # Initialize model
-    logger.info("Initializing WatsonX model...")
-    model = initialize_model()
-
-    # Load workbook
-    logger.info(f"Loading workbook: {file_path}")
-    wb = openpyxl.load_workbook(file_path, data_only=False, keep_vba=False)
-    logger.info(f"Found {len(wb.sheetnames)} sheets")
-
-    total_questions_answered = 0
-    sheets_processed = 0
-    processing_details = []
-
-    # Process each sheet
-    for sheet_name in wb.sheetnames:
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Processing sheet: {sheet_name}")
+    try:
+        logger.info(f"{'='*60}")
+        logger.info("EXCEL AI PROCESSOR - Document Processing")
         logger.info(f"{'='*60}")
 
-        ws = wb[sheet_name]
-        df = pd.read_excel(file_path, sheet_name=sheet_name)
+        # Validate input file exists
+        if not os.path.exists(file_path):
+            error_msg = f"Input file not found: {file_path}"
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "error": error_msg,
+                "output_path": None,
+                "sheets_processed": 0,
+                "total_sheets": 0,
+                "questions_answered": 0,
+                "details": []
+            }
 
-        if df.empty:
-            logger.info(f"  ⊘ Skipping empty sheet")
-            continue
-
-        # Detect Q&A columns using LLM
-        logger.info(f"  Detecting Q&A columns...")
-        question_col_name, answer_col_name = detect_qa_columns_in_sheet(df, model)
-
-        if not question_col_name or not answer_col_name:
-            logger.info(f"  ⊘ Could not detect Q&A columns, skipping sheet")
-            continue
-
-        logger.info(f"  ✓ Question column: {question_col_name}")
-        logger.info(f"  ✓ Answer column: {answer_col_name}")
-
-        # Get column indices
+        # Initialize model
+        logger.info("Initializing WatsonX model...")
         try:
-            question_col_idx = df.columns.get_loc(question_col_name) + 1
-            answer_col_idx = df.columns.get_loc(answer_col_name) + 1
-        except KeyError:
-            logger.info(f"  ⊘ Column names not found, skipping sheet")
-            continue
+            model = initialize_model()
+        except Exception as e:
+            error_msg = f"Failed to initialize model: {str(e)}"
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "error": error_msg,
+                "output_path": None,
+                "sheets_processed": 0,
+                "total_sheets": 0,
+                "questions_answered": 0,
+                "details": []
+            }
 
-        # Set column widths
-        ws.column_dimensions[openpyxl.utils.get_column_letter(question_col_idx)].width = 60
-        ws.column_dimensions[openpyxl.utils.get_column_letter(answer_col_idx)].width = 80
+        # Load workbook with warnings suppressed
+        logger.info(f"Loading workbook: {file_path}")
+        try:
+            wb = openpyxl.load_workbook(file_path, data_only=False, keep_vba=False)
 
-        # Process rows
-        questions_in_sheet = 0
-        for idx, row in df.iterrows():
-            excel_row = idx + 2
+            # Check if the file has corrupted sheet structure
+            use_xml_fallback = len(wb.sheetnames) == 0
 
-            question = row.get(question_col_name)
-            answer = row.get(answer_col_name)
+            if use_xml_fallback:
+                logger.warning("File has corrupted sheet structure - using XML fallback")
+                sheet_names = get_sheet_names_xml(file_path)
+                if not sheet_names:
+                    raise Exception("No sheets found in workbook. File may be corrupted or empty.")
+            else:
+                sheet_names = wb.sheetnames
+                logger.info(f"Found {len(sheet_names)} sheets")
 
-            if pd.isna(question) or str(question).strip() == "":
+        except Exception as e:
+            error_msg = f"Failed to load workbook: {str(e)}"
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "error": error_msg,
+                "output_path": None,
+                "sheets_processed": 0,
+                "total_sheets": 0,
+                "questions_answered": 0,
+                "details": []
+            }
+
+        total_questions_answered = 0
+        sheets_processed = 0
+        processing_details = []
+        errors = []
+
+        # Process each sheet
+        for sheet_name in sheet_names:
+            try:
+                # Check if we should skip this sheet
+                if should_skip_sheet(sheet_name):
+                    logger.info(f"⊘ Skipping sheet (instruction/legend): {sheet_name}")
+                    continue
+
+                logger.info(f"\n{'='*60}")
+                logger.info(f"Processing sheet: {sheet_name}")
+                logger.info(f"{'='*60}")
+
+                # Get or create worksheet
+                try:
+                    ws = wb[sheet_name]
+                except KeyError:
+                    # Sheet exists in XML but not accessible - create new one
+                    logger.warning(f"  ⚠ Creating new sheet '{sheet_name}' (original not accessible)")
+                    ws = wb.create_sheet(sheet_name)
+
+                # Read sheet with error handling
+                try:
+                    df = pd.read_excel(file_path, sheet_name=sheet_name)
+                except Exception as e:
+                    logger.error(f"  ✗ Failed to read sheet: {str(e)}")
+                    errors.append(f"Sheet '{sheet_name}': Failed to read - {str(e)}")
+                    continue
+
+                if df.empty:
+                    logger.info(f"  ⊘ Skipping empty sheet")
+                    continue
+
+                # Detect Q&A columns using LLM (returns 1-based indices)
+                logger.info(f"  Detecting Q&A columns...")
+                try:
+                    question_col_idx, answer_col_idx = detect_qa_columns_in_sheet(df, model)
+                except Exception as e:
+                    logger.error(f"  ✗ Column detection failed: {str(e)}")
+                    errors.append(f"Sheet '{sheet_name}': Column detection failed - {str(e)}")
+                    continue
+
+                if not question_col_idx or not answer_col_idx:
+                    logger.info(f"  ⊘ Could not detect Q&A columns, skipping sheet")
+                    errors.append(f"Sheet '{sheet_name}': Could not detect Q&A columns")
+                    continue
+
+                # Get actual column names for reference (indices are 1-based, pandas columns are 0-based)
+                try:
+                    question_col_name = df.columns[question_col_idx - 1]
+                    answer_col_name = df.columns[answer_col_idx - 1]
+                    logger.info(f"  ✓ Question column: {question_col_name} (index {question_col_idx})")
+                    logger.info(f"  ✓ Answer column: {answer_col_name} (index {answer_col_idx})")
+                except IndexError as e:
+                    logger.error(f"  ✗ Invalid column indices: Q={question_col_idx}, A={answer_col_idx}")
+                    errors.append(f"Sheet '{sheet_name}': Invalid column indices detected")
+                    continue
+
+                # Set column widths safely
+                try:
+                    ws.column_dimensions[openpyxl.utils.get_column_letter(question_col_idx)].width = 60
+                    ws.column_dimensions[openpyxl.utils.get_column_letter(answer_col_idx)].width = 80
+                except Exception as e:
+                    logger.warning(f"  ⚠ Could not set column widths: {str(e)}")
+
+                # Process rows
+                questions_in_sheet = 0
+                for idx, row in df.iterrows():
+                    try:
+                        excel_row = idx + 2
+
+                        # Access using column index (0-based for pandas)
+                        try:
+                            question = row.iloc[question_col_idx - 1]
+                            answer = row.iloc[answer_col_idx - 1]
+                        except IndexError as e:
+                            logger.error(f"  ✗ Error accessing columns in row {excel_row}: {str(e)}")
+                            continue
+
+                        if pd.isna(question) or str(question).strip() == "":
+                            continue
+
+                        question_str = str(question).strip()
+                        answer_str = str(answer).strip() if pd.notna(answer) else ""
+
+                        # Check if answer is missing
+                        if not answer_str or answer_str.lower() in ['nan', 'unanswered', '']:
+                            logger.info(f"  Answering row {excel_row}: {question_str[:60]}...")
+
+                            # Get answer from LLM with RAG
+                            try:
+                                generated_answer = ask_llm(question_str, model, context)
+                            except Exception as e:
+                                logger.error(f"  ✗ Failed to generate answer for row {excel_row}: {str(e)}")
+                                generated_answer = f"Error generating answer: {str(e)}"
+
+                            # Handle merged cells safely
+                            try:
+                                answer_cell = ws.cell(row=excel_row, column=answer_col_idx)
+                                if isinstance(answer_cell, openpyxl.cell.cell.MergedCell):
+                                    for merged_range in list(ws.merged_cells.ranges):
+                                        if answer_cell.coordinate in merged_range:
+                                            ws.unmerge_cells(str(merged_range))
+                                            break
+                                    answer_cell = ws.cell(row=excel_row, column=answer_col_idx)
+
+                                # Fill in the answer
+                                answer_cell.value = generated_answer
+                                answer_cell.alignment = Alignment(wrap_text=True, vertical='top')
+                            except Exception as e:
+                                logger.error(f"  ✗ Failed to write answer to row {excel_row}: {str(e)}")
+                                continue
+
+                            # Format question cell safely
+                            try:
+                                question_cell = ws.cell(row=excel_row, column=question_col_idx)
+                                if isinstance(question_cell, openpyxl.cell.cell.MergedCell):
+                                    for merged_range in list(ws.merged_cells.ranges):
+                                        if question_cell.coordinate in merged_range:
+                                            ws.unmerge_cells(str(merged_range))
+                                            break
+                                    question_cell = ws.cell(row=excel_row, column=question_col_idx)
+
+                                question_cell.alignment = Alignment(wrap_text=True, vertical='top')
+                            except Exception as e:
+                                logger.warning(f"  ⚠ Could not format question cell at row {excel_row}: {str(e)}")
+
+                            # Adjust row height safely
+                            try:
+                                estimated_lines = max(len(generated_answer) // 80, 1)
+                                min_height = max(15 * estimated_lines, 15)
+                                ws.row_dimensions[excel_row].height = min(min_height, 150)
+                            except Exception as e:
+                                logger.warning(f"  ⚠ Could not adjust row height for row {excel_row}: {str(e)}")
+
+                            questions_in_sheet += 1
+                            total_questions_answered += 1
+
+                    except Exception as e:
+                        logger.error(f"  ✗ Error processing row {idx + 2}: {str(e)}")
+                        errors.append(f"Sheet '{sheet_name}', Row {idx + 2}: {str(e)}")
+                        continue
+
+                sheets_processed += 1
+                processing_details.append({
+                    "sheet": sheet_name,
+                    "questions_answered": questions_in_sheet
+                })
+                logger.info(f"  ✓ Answered {questions_in_sheet} questions in this sheet")
+
+            except Exception as e:
+                logger.error(f"  ✗ Unexpected error processing sheet '{sheet_name}': {str(e)}")
+                errors.append(f"Sheet '{sheet_name}': Unexpected error - {str(e)}")
                 continue
 
-            question_str = str(question).strip()
-            answer_str = str(answer).strip() if pd.notna(answer) else ""
+        # Save workbook
+        if output_path is None:
+            from pathlib import Path
+            input_path = Path(file_path)
+            output_path = str(input_path.parent / f"{input_path.stem}_completed{input_path.suffix}")
 
-            # Check if answer is missing
-            if not answer_str or answer_str.lower() in ['nan', 'unanswered', '']:
-                logger.info(f"  Answering row {excel_row}: {question_str[:60]}...")
+        logger.info(f"\n{'='*60}")
+        logger.info("PROCESSING SUMMARY")
+        logger.info(f"{'='*60}")
+        logger.info(f"Sheets processed: {sheets_processed}/{len(sheet_names)}")
+        logger.info(f"Total questions answered: {total_questions_answered}")
+        logger.info(f"Output file: {output_path}")
+        if errors:
+            logger.warning(f"Errors encountered: {len(errors)}")
+            for error in errors[:5]:  # Show first 5 errors
+                logger.warning(f"  - {error}")
+        logger.info(f"{'='*60}\n")
 
-                # Get answer from LLM with RAG
-                generated_answer = ask_llm(question_str, model, context)
+        # Save with error handling
+        try:
+            wb.save(output_path)
+            logger.info(f"✓ File saved successfully to: {output_path}")
+        except Exception as e:
+            error_msg = f"Failed to save workbook: {str(e)}"
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "error": error_msg,
+                "output_path": None,
+                "sheets_processed": sheets_processed,
+                "total_sheets": len(sheet_names),
+                "questions_answered": total_questions_answered,
+                "details": processing_details,
+                "errors": errors
+            }
 
-                # Handle merged cells
-                answer_cell = ws.cell(row=excel_row, column=answer_col_idx)
-                if isinstance(answer_cell, openpyxl.cell.cell.MergedCell):
-                    for merged_range in list(ws.merged_cells.ranges):
-                        if answer_cell.coordinate in merged_range:
-                            ws.unmerge_cells(str(merged_range))
-                            break
-                    answer_cell = ws.cell(row=excel_row, column=answer_col_idx)
+        return {
+            "success": True,
+            "output_path": output_path,
+            "sheets_processed": sheets_processed,
+            "total_sheets": len(sheet_names),
+            "questions_answered": total_questions_answered,
+            "details": processing_details,
+            "errors": errors if errors else None
+        }
 
-                # Fill in the answer
-                answer_cell.value = generated_answer
-                answer_cell.alignment = Alignment(wrap_text=True, vertical='top')
-
-                # Format question cell
-                question_cell = ws.cell(row=excel_row, column=question_col_idx)
-                if isinstance(question_cell, openpyxl.cell.cell.MergedCell):
-                    for merged_range in list(ws.merged_cells.ranges):
-                        if question_cell.coordinate in merged_range:
-                            ws.unmerge_cells(str(merged_range))
-                            break
-                    question_cell = ws.cell(row=excel_row, column=question_col_idx)
-
-                question_cell.alignment = Alignment(wrap_text=True, vertical='top')
-
-                # Adjust row height
-                estimated_lines = max(len(generated_answer) // 80, 1)
-                min_height = max(15 * estimated_lines, 15)
-                ws.row_dimensions[excel_row].height = min(min_height, 150)
-
-                questions_in_sheet += 1
-                total_questions_answered += 1
-
-        sheets_processed += 1
-        processing_details.append({
-            "sheet": sheet_name,
-            "questions_answered": questions_in_sheet
-        })
-        logger.info(f"  ✓ Answered {questions_in_sheet} questions in this sheet")
-
-    # Save workbook
-    if output_path is None:
-        from pathlib import Path
-        input_path = Path(file_path)
-        output_path = str(input_path.parent / f"{input_path.stem}_completed{input_path.suffix}")
-
-    logger.info(f"\n{'='*60}")
-    logger.info("PROCESSING SUMMARY")
-    logger.info(f"{'='*60}")
-    logger.info(f"Sheets processed: {sheets_processed}/{len(wb.sheetnames)}")
-    logger.info(f"Total questions answered: {total_questions_answered}")
-    logger.info(f"Output file: {output_path}")
-    logger.info(f"{'='*60}\n")
-
-    wb.save(output_path)
-
-    return {
-        "success": True,
-        "output_path": output_path,
-        "sheets_processed": sheets_processed,
-        "total_sheets": len(wb.sheetnames),
-        "questions_answered": total_questions_answered,
-        "details": processing_details
-    }
+    except Exception as e:
+        error_msg = f"Unexpected error in process_document: {str(e)}"
+        logger.error(error_msg)
+        import traceback
+        logger.error(traceback.format_exc())
+        return {
+            "success": False,
+            "error": error_msg,
+            "output_path": None,
+            "sheets_processed": 0,
+            "total_sheets": 0,
+            "questions_answered": 0,
+            "details": [],
+            "errors": [error_msg]
+        }
 
 
 if __name__ == "__main__":

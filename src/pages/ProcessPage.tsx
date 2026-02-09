@@ -92,7 +92,7 @@ const ProcessPage: React.FC = () => {
   };
 
   const handleProcess = async () => {
-    if (!uploadData) {
+    if (!file) {
       setError('Please upload a file first');
       return;
     }
@@ -102,38 +102,46 @@ const ProcessPage: React.FC = () => {
     setSuccess(null);
 
     try {
-      const response = await fetch('/api/process', {
+      // Use Python RAG service for enhanced processing
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('context', context);
+
+      const response = await fetch('http://localhost:5000/process', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          filePath: uploadData.filePath,
-          questions: questions,
-          context: context,
-        }),
+        body: formData,
       });
 
-      const data = await response.json();
+      // Check if response is a file (direct download) or JSON (error or metadata)
+      const contentType = response.headers.get('content-type');
 
-      if (response.ok && data.success) {
-        // Update questions with AI-generated answers
-        const updatedQuestions = questions.map((q, index) => ({
-          ...q,
-          answer: Array.isArray(data.answers) 
-            ? data.answers[index]?.answer || q.answer
-            : data.answers,
-        }));
-        setQuestions(updatedQuestions);
-        setSuccess('AI processing completed! Review the answers below.');
-        
-        // Generate the file
-        await handleGenerate(updatedQuestions);
+      if (contentType && contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
+        // It's an Excel file - download it
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.name.replace('.xlsx', '_completed.xlsx');
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+        setSuccess('RAG Processing completed! File downloaded successfully.');
       } else {
-        setError(data.error || 'Failed to process with AI');
+        // It's JSON - likely an error
+        const data = await response.json();
+        if (data.error) {
+          setError(data.error || 'Failed to process with AI');
+          if (data.details) {
+            console.error('Processing details:', data.details);
+          }
+        } else {
+          setError('Unexpected response format from server');
+        }
       }
     } catch (err) {
-      setError('Network error. Please try again.');
+      setError('Network error. Make sure Python service is running on port 5000.');
       console.error('Process error:', err);
     } finally {
       setIsProcessing(false);
