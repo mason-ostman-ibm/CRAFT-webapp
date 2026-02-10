@@ -33,7 +33,6 @@ MEDIUM_CONFIDENCE_THRESHOLD = float(os.getenv("DELTA_SIMILARITY_THRESHOLD", "0.8
 ENABLE_LLM_VERIFICATION = os.getenv("DELTA_ENABLE_LLM_VERIFICATION", "true").lower() == "true"
 USE_LLM_GENERATION = os.getenv("DELTA_USE_LLM_GENERATION", "false").lower() == "true"
 
-
 class DeltaService:
     """Delta Service for intelligent questionnaire answer reuse"""
     
@@ -74,11 +73,13 @@ class DeltaService:
         try:
             credentials = Credentials(
                 url=os.getenv("WATSON_URL", "https://ca-tor.ml.cloud.ibm.com"),
+                username=os.getenv("CPD_USERNAME"),
                 api_key=os.getenv("IBM_WATSONX_API_KEY")
             )
 
             project_id = os.getenv("IBM_WATSONX_PROJECT_ID")
             model_id = os.getenv("WATSON_TEXT_MODEL", "meta-llama/llama-3-3-70b-instruct")
+            
 
             parameters = {
                 "temperature": 0.1,

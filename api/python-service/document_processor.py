@@ -57,11 +57,13 @@ def initialize_model():
     api_key = os.getenv("IBM_WATSONX_API_KEY")
     project_id = os.getenv("IBM_WATSONX_PROJECT_ID")
     space_id = os.getenv("SPACE_ID", "")
+    username = os.getenv("CPD_USERNAME")
     model_id = os.getenv("WATSON_TEXT_MODEL")
 
     # Create credentials
     credentials = Credentials(
         url=watson_url,
+        username=username,
         api_key=api_key
     )
 
