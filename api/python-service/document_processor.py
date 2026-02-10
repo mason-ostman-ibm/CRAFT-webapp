@@ -6,7 +6,7 @@ Provides RAG-powered Excel document completion with smart column detection
 
 import pandas as pd
 import openpyxl
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, PatternFill
 import openpyxl.utils
 import os
 import re
@@ -448,6 +448,7 @@ def process_document(file_path, output_path=None, context=""):
         total_questions_answered = 0
         sheets_processed = 0
         processing_details = []
+        qa_pairs = []
         errors = []
 
         # Process each sheet
@@ -534,8 +535,21 @@ def process_document(file_path, output_path=None, context=""):
                         question_str = str(question).strip()
                         answer_str = str(answer).strip() if pd.notna(answer) else ""
 
-                        # Check if answer is missing
-                        if not answer_str or answer_str.lower() in ['nan', 'unanswered', '']:
+                        # Check if answer is missing (consistent with delta_service logic)
+                        answer_lower = answer_str.lower()
+                        _unanswered_values = [
+                            'nan', 'none', 'unanswered', 'tbd', 'to be determined',
+                            'pending', 'todo', 'blank', 'empty', 'n/a'
+                        ]
+                        is_unanswered = (
+                            not answer_str or
+                            answer_str.isspace() or
+                            answer_lower in _unanswered_values or
+                            (len(answer_str) == 1 and answer_str in ['-', '_']) or
+                            answer_str in ['--', '---']
+                        )
+
+                        if is_unanswered:
                             logger.info(f"  Answering row {excel_row}: {question_str[:60]}...")
 
                             # Get answer from LLM with RAG
@@ -555,9 +569,14 @@ def process_document(file_path, output_path=None, context=""):
                                             break
                                     answer_cell = ws.cell(row=excel_row, column=answer_col_idx)
 
-                                # Fill in the answer
+                                # Fill in the answer and highlight as AI-generated
                                 answer_cell.value = generated_answer
                                 answer_cell.alignment = Alignment(wrap_text=True, vertical='top')
+                                answer_cell.fill = PatternFill(
+                                    start_color="FFFACD",
+                                    end_color="FFFACD",
+                                    fill_type="solid"
+                                )
                             except Exception as e:
                                 logger.error(f"  ✗ Failed to write answer to row {excel_row}: {str(e)}")
                                 continue
@@ -584,6 +603,12 @@ def process_document(file_path, output_path=None, context=""):
                             except Exception as e:
                                 logger.warning(f"  ⚠ Could not adjust row height for row {excel_row}: {str(e)}")
 
+                            qa_pairs.append({
+                                'sheet': sheet_name,
+                                'row': excel_row,
+                                'question': question_str,
+                                'answer': generated_answer
+                            })
                             questions_in_sheet += 1
                             total_questions_answered += 1
 
@@ -647,6 +672,7 @@ def process_document(file_path, output_path=None, context=""):
             "total_sheets": len(sheet_names),
             "questions_answered": total_questions_answered,
             "details": processing_details,
+            "qa_pairs": qa_pairs,
             "errors": errors if errors else None
         }
 

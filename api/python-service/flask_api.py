@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 from document_processor import process_document, initialize_model, detect_qa_columns_in_sheet
 import pandas as pd
+import openpyxl
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -48,42 +49,38 @@ def health_check():
 @app.route('/process', methods=['POST'])
 def process_excel():
     """
-    Process Excel file with RAG-powered AI completion
-    
+    Process Excel file with RAG-powered AI completion.
+
     Expects multipart/form-data with:
     - file: Excel file
     - context: Optional context string
-    
-    Returns JSON with processing results
+
+    Returns JSON with processing summary, preview data, and a download_filename
+    that can be fetched via GET /python/download/<filename>.
     """
     input_path = None
-    output_path = None
 
     try:
-        # Check if file is present
         if 'file' not in request.files:
             return jsonify({"error": "No file provided"}), 400
-        
+
         file = request.files['file']
         context = request.form.get('context', '')
-        
+
         if file.filename == '':
             return jsonify({"error": "No file selected"}), 400
-        
+
         if not file.filename.endswith('.xlsx'):
             return jsonify({"error": "File must be .xlsx format"}), 400
-        
-        # Save uploaded file to temp location
+
         with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_input:
             file.save(temp_input.name)
             input_path = temp_input.name
-        
+
         logger.info(f"Processing file: {file.filename}")
-        
-        # Process the document
+
         result = process_document(input_path, context=context)
-        
-        # Check if processing was successful
+
         if not result.get('success', False):
             error_msg = result.get('error', 'Unknown processing error')
             logger.error(f"Processing failed: {error_msg}")
@@ -92,46 +89,73 @@ def process_excel():
                 "details": result.get('errors', [])
             }), 500
 
-        # Read the output file and return it directly
         output_path = result.get('output_path')
         if not output_path or not os.path.exists(output_path):
             return jsonify({"error": "Output file not generated"}), 500
 
-        # Return the file directly
+        # Store output file for later download (keyed by download filename)
         output_filename = f"{Path(file.filename).stem}_completed.xlsx"
+        if not hasattr(app, 'python_files'):
+            app.python_files = {}
+        app.python_files[output_filename] = output_path
 
-        try:
-            return send_file(
-                output_path,
-                as_attachment=True,
-                download_name=output_filename,
-                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
-        finally:
-            # Schedule cleanup after file is sent
-            try:
-                os.unlink(output_path)
-                logger.info(f"Cleaned up output file: {output_path}")
-            except Exception as e:
-                logger.warning(f"Failed to clean up output file: {e}")
-    
+        return jsonify({
+            "success": True,
+            "questions_answered": result.get('questions_answered', 0),
+            "sheets_processed": result.get('sheets_processed', 0),
+            "total_sheets": result.get('total_sheets', 0),
+            "details": result.get('details', []),
+            "qa_pairs": result.get('qa_pairs', []),
+            "download_filename": output_filename
+        })
+
     except Exception as e:
         logger.error(f"Error processing file: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
-    
+
     finally:
-        # Clean up temp files
         if input_path and os.path.exists(input_path):
             try:
                 os.unlink(input_path)
             except Exception as e:
                 logger.warning(f"Failed to clean up input file: {e}")
-        
-        if output_path and os.path.exists(output_path):
+
+
+@app.route('/python/download/<path:filename>', methods=['GET'])
+def download_python_file(filename):
+    """Download a processed Excel file stored by /process"""
+    try:
+        if not hasattr(app, 'python_files') or filename not in app.python_files:
+            return jsonify({"error": "File not found or expired"}), 404
+
+        filepath = app.python_files[filename]
+
+        if not os.path.exists(filepath):
+            del app.python_files[filename]
+            return jsonify({"error": "File not found"}), 404
+
+        response = send_file(
+            filepath,
+            as_attachment=True,
+            download_name=filename,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+
+        @response.call_on_close
+        def cleanup():
             try:
-                os.unlink(output_path)
+                if os.path.exists(filepath):
+                    os.unlink(filepath)
+                if hasattr(app, 'python_files') and filename in app.python_files:
+                    del app.python_files[filename]
             except Exception as e:
-                logger.warning(f"Failed to clean up output file: {e}")
+                logger.warning(f"Failed to clean up {filepath}: {e}")
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error downloading python file: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/download/<path:filepath>', methods=['GET'])
@@ -469,6 +493,47 @@ def get_baseline_info():
 
     except Exception as e:
         logger.error(f"Error getting baseline info: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/delta/preview/<path:filename>', methods=['GET'])
+def preview_delta_file(filename):
+    """Get sheet preview data from a processed delta file"""
+    try:
+        if not hasattr(app, 'delta_files') or filename not in app.delta_files:
+            return jsonify({"error": "File not found or expired"}), 404
+
+        filepath = app.delta_files[filename]
+
+        if not os.path.exists(filepath):
+            if hasattr(app, 'delta_files') and filename in app.delta_files:
+                del app.delta_files[filename]
+            return jsonify({"error": "File not found"}), 404
+
+        workbook = openpyxl.load_workbook(filepath, data_only=True)
+
+        sheets = []
+        for sheet_name in workbook.sheetnames:
+            ws = workbook[sheet_name]
+            rows = []
+            for i, row in enumerate(ws.iter_rows(values_only=True)):
+                if i >= 51:  # header + 50 data rows
+                    break
+                row_data = [str(cell) if cell is not None else '' for cell in row]
+                if any(cell for cell in row_data):
+                    rows.append(row_data)
+
+            if rows:
+                sheets.append({
+                    'name': sheet_name,
+                    'headers': rows[0] if rows else [],
+                    'rows': rows[1:] if len(rows) > 1 else []
+                })
+
+        return jsonify({'success': True, 'sheets': sheets})
+
+    except Exception as e:
+        logger.error(f"Error previewing delta file: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

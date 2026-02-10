@@ -15,10 +15,10 @@ import { UserAvatar, Settings } from '@carbon/icons-react';
 const MainLayout: React.FC = () => {
   return (
     <>
-      <Header aria-label="Excel AI Processor">
+      <Header aria-label="CRAFT">
         <SkipToContent />
         <HeaderName href="/" prefix="IBM">
-          Excel AI Processor
+          CRAFT
         </HeaderName>
         <HeaderNavigation aria-label="Main Navigation">
           <HeaderMenuItem href="/">Home</HeaderMenuItem>

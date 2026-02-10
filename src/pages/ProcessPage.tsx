@@ -17,8 +17,9 @@ import {
   TableCell,
   TextArea,
   Stack,
+  Tag,
 } from '@carbon/react';
-import { Download, Renew } from '@carbon/icons-react';
+import { Download, Renew, CheckmarkFilled } from '@carbon/icons-react';
 
 interface Question {
   question: string;
@@ -35,20 +36,38 @@ interface UploadResponse {
   totalQuestions: number;
 }
 
+interface QaPair {
+  sheet: string;
+  row: number;
+  question: string;
+  answer: string;
+}
+
+interface ProcessResult {
+  success: boolean;
+  questions_answered: number;
+  sheets_processed: number;
+  total_sheets: number;
+  details: { sheet: string; questions_answered: number }[];
+  download_filename: string;
+  download_url: string;
+  qa_pairs: QaPair[];
+}
+
 const ProcessPage: React.FC = () => {
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
   const [uploadData, setUploadData] = useState<UploadResponse | null>(null);
-  const [questions, setQuestions] = useState<Question[]>([]);
   const [context, setContext] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [processResult, setProcessResult] = useState<ProcessResult | null>(null);
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
+  const handleFileChange = (event: any) => {
+    const files = event.target?.files || event.addedFiles;
     if (files && files.length > 0) {
       setFile(files[0]);
       setError(null);
@@ -78,7 +97,6 @@ const ProcessPage: React.FC = () => {
 
       if (response.ok && data.success) {
         setUploadData(data);
-        setQuestions(data.questions);
         setSuccess(`File uploaded successfully! Found ${data.totalQuestions} questions.`);
       } else {
         setError(data.error || 'Failed to upload file');
@@ -100,81 +118,38 @@ const ProcessPage: React.FC = () => {
     setIsProcessing(true);
     setError(null);
     setSuccess(null);
+    setProcessResult(null);
 
     try {
-      // Use Python RAG service for enhanced processing
       const formData = new FormData();
       formData.append('file', file);
       formData.append('context', context);
 
-      const response = await fetch('http://localhost:5000/process', {
+      const response = await fetch('/api/python/process', {
         method: 'POST',
         body: formData,
       });
 
-      // Check if response is a file (direct download) or JSON (error or metadata)
-      const contentType = response.headers.get('content-type');
+      const data: ProcessResult = await response.json();
 
-      if (contentType && contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
-        // It's an Excel file - download it
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = file.name.replace('.xlsx', '_completed.xlsx');
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-
-        setSuccess('RAG Processing completed! File downloaded successfully.');
+      if (response.ok && data.success) {
+        setProcessResult(data);
+        setDownloadUrl(data.download_url);
+        setSuccess(
+          `Processing complete! Answered ${data.questions_answered} questions across ${data.sheets_processed} sheet(s).`
+        );
       } else {
-        // It's JSON - likely an error
-        const data = await response.json();
-        if (data.error) {
-          setError(data.error || 'Failed to process with AI');
-          if (data.details) {
-            console.error('Processing details:', data.details);
-          }
-        } else {
-          setError('Unexpected response format from server');
+        const errData = data as any;
+        setError(errData.error || 'Failed to process with AI');
+        if (errData.details) {
+          console.error('Processing details:', errData.details);
         }
       }
     } catch (err) {
-      setError('Network error. Make sure Python service is running on port 5000.');
+      setError('Network error. Please try again.');
       console.error('Process error:', err);
     } finally {
       setIsProcessing(false);
-    }
-  };
-
-  const handleGenerate = async (processedQuestions: Question[]) => {
-    if (!uploadData) return;
-
-    try {
-      const response = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          originalFilePath: uploadData.filePath,
-          questions: processedQuestions,
-          answers: processedQuestions.map(q => ({ answer: q.answer })),
-        }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        setDownloadUrl(data.downloadUrl);
-        setSuccess('File generated successfully! Click download to get your file.');
-      } else {
-        setError(data.error || 'Failed to generate file');
-      }
-    } catch (err) {
-      setError('Network error. Please try again.');
-      console.error('Generate error:', err);
     }
   };
 
@@ -187,23 +162,12 @@ const ProcessPage: React.FC = () => {
   const handleReset = () => {
     setFile(null);
     setUploadData(null);
-    setQuestions([]);
     setContext('');
     setError(null);
     setSuccess(null);
     setDownloadUrl(null);
+    setProcessResult(null);
   };
-
-  const headers = [
-    { key: 'question', header: 'Question' },
-    { key: 'answer', header: 'Answer' },
-  ];
-
-  const rows = questions.map((q, index) => ({
-    id: `${index}`,
-    question: q.question,
-    answer: q.answer || 'Not yet processed',
-  }));
 
   return (
     <Grid className="page-content" fullWidth>
@@ -274,62 +238,103 @@ const ProcessPage: React.FC = () => {
                 >
                   {isProcessing ? 'Processing with AI...' : 'Process with AI'}
                 </Button>
+                {isProcessing && (
+                  <div style={{ marginTop: '1rem' }}>
+                    <Loading description="Processing with AI — this may take a few minutes..." />
+                  </div>
+                )}
               </div>
+            </>
+          )}
 
-              <div style={{ padding: '2rem', backgroundColor: '#262626', borderRadius: '4px' }}>
-                <Heading style={{ marginBottom: '1rem' }}>Questions & Answers</Heading>
-                {isProcessing && <Loading description="Processing with AI..." />}
-                <DataTable rows={rows} headers={headers}>
-                  {({ rows, headers, getTableProps, getHeaderProps, getRowProps }) => (
-                    <Table {...getTableProps()}>
-                      <TableHead>
-                        <TableRow>
-                          {headers.map((header) => (
-                            <TableHeader {...getHeaderProps({ header })}>
-                              {header.header}
-                            </TableHeader>
-                          ))}
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {rows.map((row) => (
-                          <TableRow {...getRowProps({ row })}>
-                            {row.cells.map((cell) => (
-                              <TableCell key={cell.id}>{cell.value}</TableCell>
+          {processResult && (
+            <>
+              {/* Q&A Preview */}
+              {processResult.qa_pairs && processResult.qa_pairs.length > 0 && (
+                <div style={{ padding: '2rem', backgroundColor: '#262626', borderRadius: '4px' }}>
+                  <Heading style={{ marginBottom: '0.5rem' }}>
+                    <CheckmarkFilled style={{ marginRight: '0.5rem', color: '#42be65' }} />
+                    Step 3: AI-Answered Questions ({processResult.qa_pairs.length})
+                  </Heading>
+                  <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                    <Tag type="green">{processResult.questions_answered} answered</Tag>
+                    <Tag type="blue">
+                      {processResult.sheets_processed} / {processResult.total_sheets} sheets
+                    </Tag>
+                    {processResult.details.map((d) => (
+                      <Tag key={d.sheet} type="gray">
+                        {d.sheet}: {d.questions_answered}
+                      </Tag>
+                    ))}
+                  </div>
+                  <div style={{ maxHeight: '480px', overflowY: 'auto' }}>
+                  <DataTable
+                    rows={processResult.qa_pairs.map((pair, i) => ({
+                      id: `${i}`,
+                      sheet: pair.sheet,
+                      question: pair.question.length > 80
+                        ? pair.question.substring(0, 80) + '...'
+                        : pair.question,
+                      answer: pair.answer.length > 120
+                        ? pair.answer.substring(0, 120) + '...'
+                        : pair.answer,
+                    }))}
+                    headers={[
+                      { key: 'sheet', header: 'Sheet' },
+                      { key: 'question', header: 'Question' },
+                      { key: 'answer', header: 'AI Answer' },
+                    ]}
+                  >
+                    {({ rows, headers, getTableProps, getHeaderProps, getRowProps }) => (
+                      <Table {...getTableProps()}>
+                        <TableHead>
+                          <TableRow>
+                            {headers.map((header) => (
+                              <TableHeader {...getHeaderProps({ header })} key={header.key}>
+                                {header.header}
+                              </TableHeader>
                             ))}
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </DataTable>
-              </div>
-
-              {downloadUrl && (
-                <div style={{ padding: '2rem', backgroundColor: '#262626', borderRadius: '4px' }}>
-                  <Heading style={{ marginBottom: '1rem' }}>Step 3: Download</Heading>
-                  <div style={{ display: 'flex', gap: '1rem' }}>
-                    <Button
-                      onClick={handleDownload}
-                      renderIcon={Download}
-                    >
-                      Download Processed File
-                    </Button>
-                    <Button
-                      kind="secondary"
-                      onClick={() => navigate('/validate')}
-                    >
-                      Validate Answers
-                    </Button>
-                    <Button
-                      kind="tertiary"
-                      onClick={handleReset}
-                    >
-                      Process Another File
-                    </Button>
+                        </TableHead>
+                        <TableBody>
+                          {rows.map((row) => (
+                            <TableRow {...getRowProps({ row })} key={row.id}>
+                              {row.cells.map((cell) => (
+                                <TableCell key={cell.id}>{cell.value}</TableCell>
+                              ))}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </DataTable>
                   </div>
                 </div>
               )}
+
+              {processResult.qa_pairs && processResult.qa_pairs.length === 0 && (
+                <div style={{ padding: '2rem', backgroundColor: '#262626', borderRadius: '4px' }}>
+                  <p style={{ color: '#c6c6c6', fontSize: '0.875rem' }}>
+                    No unanswered questions were found — all questions already had answers.
+                  </p>
+                </div>
+              )}
+
+              {/* Download */}
+              <div style={{ padding: '2rem', backgroundColor: '#262626', borderRadius: '4px' }}>
+                <Heading style={{ marginBottom: '1rem' }}>Step 4: Download</Heading>
+                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                  <Button onClick={handleDownload} renderIcon={Download}>
+                    Download Processed File
+                  </Button>
+                  <Button kind="secondary" onClick={() => navigate('/validate')}>
+                    Validate Answers
+                  </Button>
+                  <Button kind="tertiary" onClick={handleReset}>
+                    Process Another File
+                  </Button>
+                </div>
+              </div>
             </>
           )}
         </Stack>

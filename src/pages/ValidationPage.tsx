@@ -70,6 +70,13 @@ const ValidationPage: React.FC = () => {
             </p>
           </div>
 
+          <InlineNotification
+            kind="warning"
+            title="Not available"
+            subtitle="The Validation tool is not functional at this time. Please download your processed file directly from the Process or Delta pages."
+            hideCloseButton
+          />
+
           {error && (
             <InlineNotification
               kind="info"
