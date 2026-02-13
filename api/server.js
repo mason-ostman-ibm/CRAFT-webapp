@@ -946,6 +946,21 @@ app.delete('/api/delta/baseline', async (req, res) => {
 });
 
 /**
+ * Preview processed delta file - Proxy to Python
+ */
+app.get('/api/delta/preview/:filename', async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const response = await fetch(`${PYTHON_SERVICE_URL}/delta/preview/${encodeURIComponent(filename)}`);
+    const result = await response.json();
+    res.status(response.status).json(result);
+  } catch (error) {
+    console.error('Error getting delta preview:', error);
+    res.status(500).json({ error: 'Failed to get preview', message: error.message });
+  }
+});
+
+/**
  * Check Delta Service status - Proxy to Python
  */
 app.get('/api/delta/status', async (req, res) => {
@@ -959,6 +974,124 @@ app.get('/api/delta/status', async (req, res) => {
       service: 'Delta Tool',
       error: 'Python service not available'
     });
+  }
+});
+
+/**
+ * Process Excel with Python RAG service - returns JSON with preview + download_filename
+ */
+app.post('/api/python/process', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const context = req.body.context || '';
+
+    const FormData = (await import('form-data')).default;
+    const formData = new FormData();
+    formData.append('file', createReadStream(req.file.path), {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+      knownLength: req.file.size
+    });
+    formData.append('context', context);
+
+    const http = await import('http');
+    const url = new URL(PYTHON_SERVICE_URL);
+
+    const options = {
+      method: 'POST',
+      hostname: url.hostname,
+      port: url.port || 5000,
+      path: '/process',
+      headers: formData.getHeaders()
+    };
+
+    await new Promise((resolve) => {
+      const proxyReq = http.request(options, (proxyRes) => {
+        let data = '';
+        proxyRes.on('data', (chunk) => { data += chunk; });
+        proxyRes.on('end', () => {
+          try {
+            const result = JSON.parse(data);
+            if (result.success && result.download_filename) {
+              result.download_url = `/api/python/download/${encodeURIComponent(result.download_filename)}`;
+            }
+            res.status(proxyRes.statusCode).json(result);
+          } catch {
+            res.status(proxyRes.statusCode).json({ error: data });
+          }
+          resolve();
+        });
+      });
+
+      proxyReq.on('error', (error) => {
+        trackError(error, { operation: 'python_process' });
+        res.status(500).json({ error: error.message });
+        resolve();
+      });
+
+      formData.pipe(proxyReq);
+    });
+
+  } catch (error) {
+    console.error('Error proxying to Python process:', error);
+    trackError(error, { operation: 'python_process' });
+    res.status(500).json({ error: error.message });
+  } finally {
+    if (req.file?.path) {
+      try { await fs.unlink(req.file.path); } catch {}
+    }
+  }
+});
+
+/**
+ * Download processed Python file - streams from Python service
+ */
+app.get('/api/python/download/:filename', async (req, res) => {
+  try {
+    const { filename } = req.params;
+
+    const http = await import('http');
+    const url = new URL(PYTHON_SERVICE_URL);
+
+    const options = {
+      hostname: url.hostname,
+      port: url.port || 5000,
+      path: `/python/download/${encodeURIComponent(filename)}`,
+      method: 'GET'
+    };
+
+    const proxyRequest = http.request(options, (proxyResponse) => {
+      if (proxyResponse.statusCode === 200) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        proxyResponse.pipe(res);
+      } else {
+        let errorData = '';
+        proxyResponse.on('data', (chunk) => { errorData += chunk; });
+        proxyResponse.on('end', () => {
+          try {
+            res.status(proxyResponse.statusCode).json(JSON.parse(errorData));
+          } catch {
+            res.status(proxyResponse.statusCode).json({ error: 'File not found' });
+          }
+        });
+      }
+    });
+
+    proxyRequest.on('error', (error) => {
+      trackError(error, { operation: 'python_download' });
+      res.status(500).json({ error: error.message });
+    });
+
+    proxyRequest.end();
+
+  } catch (error) {
+    console.error('Error downloading python file:', error);
+    trackError(error, { operation: 'python_download' });
+    res.status(500).json({ error: error.message });
   }
 });
 

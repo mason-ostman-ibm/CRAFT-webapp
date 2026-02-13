@@ -497,6 +497,7 @@ const DeltaPage: React.FC = () => {
                     <CheckmarkFilled style={{ marginRight: '0.5rem', color: '#42be65' }} />
                     Auto-Answered Questions ({processingResults.matches.length})
                   </Heading>
+                  <div style={{ maxHeight: '480px', overflowY: 'auto' }}>
                   <DataTable rows={matchRows} headers={matchHeaders}>
                     {({ rows, headers, getTableProps, getHeaderProps, getRowProps }) => (
                       <Table {...getTableProps()}>
@@ -534,6 +535,7 @@ const DeltaPage: React.FC = () => {
                       </Table>
                     )}
                   </DataTable>
+                  </div>
                 </div>
               )}
 
@@ -547,6 +549,7 @@ const DeltaPage: React.FC = () => {
                   <p style={{ marginBottom: '1rem', color: '#c6c6c6', fontSize: '0.875rem' }}>
                     These questions could not be matched with sufficient confidence and require manual completion or AI processing.
                   </p>
+                  <div style={{ maxHeight: '480px', overflowY: 'auto' }}>
                   <DataTable rows={unmatchedRows} headers={unmatchedHeaders}>
                     {({ rows, headers, getTableProps, getHeaderProps, getRowProps }) => (
                       <Table {...getTableProps()}>
@@ -571,6 +574,7 @@ const DeltaPage: React.FC = () => {
                       </Table>
                     )}
                   </DataTable>
+                  </div>
                 </div>
               )}
 
