@@ -10,6 +10,11 @@ import os
 import tempfile
 import logging
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from the same directory as this file, regardless of CWD
+load_dotenv(Path(__file__).parent / '.env')
+
 from document_processor import process_document, initialize_model, detect_qa_columns_in_sheet
 import pandas as pd
 import openpyxl
@@ -227,7 +232,7 @@ def detect_columns():
         
         # Detect columns
         model = get_model()
-        question_col, answer_col = detect_qa_columns_in_sheet(df, model)
+        question_col, answer_col, _ = detect_qa_columns_in_sheet(df, model)
         
         if not question_col or not answer_col:
             return jsonify({"error": "Could not detect Q&A columns"}), 400

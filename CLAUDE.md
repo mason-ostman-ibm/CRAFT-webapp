@@ -8,7 +8,7 @@ Excel AI Processor is a fullstack web application for automating Excel questionn
 
 **Key Technologies:**
 - Frontend: React 18 + TypeScript + Vite + IBM Carbon Design System
-- Backend: Node.js + Express.js (legacy endpoints, BYOK, OAuth)
+- Backend: Node.js + Express.js (legacy endpoints, OAuth)
 - **Primary AI Engine:** Python Flask + RAG with AstraDB + IBM Granite embeddings
 - AI Models: IBM WatsonX.ai (Mistral, Llama models)
 - Vector DB: AstraDB with semantic search
@@ -145,8 +145,6 @@ import instana from './instana.js';
 - `GET /api/download/:filename` - Download result
 - `POST /api/validate` - Validate answers
 - `GET /api/user` - Get user info from OAuth2 headers
-- `POST /api/settings/watsonx` - Save WatsonX credentials (BYOK)
-- `POST /api/settings/astradb` - Save AstraDB credentials (BYOK)
 
 **Demo Mode:**
 The backend gracefully degrades if WatsonX credentials are not configured, providing mock responses with `[DEMO MODE]` prefix.
@@ -157,7 +155,6 @@ The backend gracefully degrades if WatsonX credentials are not configured, provi
 - `/` - HomePage: Welcome and overview
 - `/process` - ProcessPage: Upload and process Excel files
 - `/validate` - ValidationPage: Review generated answers
-- `/settings` - SettingsPage: BYOK configuration
 
 **Key Components:**
 - `MainLayout.tsx` - Carbon Design System layout with header/sidebar
@@ -468,17 +465,6 @@ File upload errors are caught and returned with appropriate status codes:
 - 400: No file, invalid type
 - 500: Processing error
 
-## BYOK (Bring Your Own Key)
-
-The application supports user-specific credentials via the Settings page:
-
-**Endpoints:**
-- `POST /api/settings/watsonx` - Save WatsonX credentials
-- `POST /api/settings/astradb` - Save AstraDB credentials
-- `POST /api/settings/orchestrate` - Save Watson Orchestrate credentials
-
-**Security Note:** Currently stores credentials in memory. TODO: Implement encrypted database storage.
-
 ## Important Notes
 
 ### Production Serving
@@ -590,4 +576,3 @@ If Instana isn't tracking:
 - `QUICK_START.md` - Quick start guide
 - `STARTUP_TROUBLESHOOTING.md` - Common startup issues
 - `INTEGRATION_GUIDE.md` - Integration instructions
-- `BYOK_GUIDE.md` - Bring Your Own Key guide

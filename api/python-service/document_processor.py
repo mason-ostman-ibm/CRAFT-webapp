@@ -17,6 +17,7 @@ from typing import List, Tuple
 from ibm_watsonx_ai import Credentials
 from ibm_watsonx_ai.foundation_models import ModelInference
 from dotenv import load_dotenv
+from pathlib import Path
 from astrapy import DataAPIClient
 from sentence_transformers import SentenceTransformer
 import logging
@@ -91,14 +92,16 @@ def initialize_model():
 
 def detect_qa_columns_in_sheet(df, model):
     """
-    Use LLM to intelligently detect which columns contain questions and answers
+    Use LLM to intelligently detect which columns contain questions, answers,
+    and optionally a response type / answer options column.
 
     Args:
         df: pandas DataFrame of the sheet
         model: Initialized LLM model
 
     Returns:
-        tuple: (question_column_index, answer_column_index) or (None, None) - 1-based indices
+        tuple: (question_col_idx, answer_col_idx, response_type_col_idx)
+               All values are 1-based indices; response_type_col_idx may be None.
     """
     # Get available column names
     column_names = list(df.columns)
@@ -106,20 +109,22 @@ def detect_qa_columns_in_sheet(df, model):
     # If there are only 2 columns, just use them
     if len(column_names) == 2:
         logger.info(f"✓ Auto-detected 2 columns - Q: {column_names[0]} (col 1), A: {column_names[1]} (col 2)")
-        return 1, 2
+        return 1, 2, None
 
     sample_data = df.head(5).to_string()
 
     prompt = f"""Given this spreadsheet data, identify which column NUMBER (1, 2, 3, etc.) contains questions and which contains answers.
+Also look for a column whose cells contain the actual allowed answer values or choices — for example cells that say "Yes; No", "High; Medium; Low", or a list of options separated by semicolons, commas, or newlines. This column is typically labelled "Response Choices", "Answer Options", "Valid Values", "Options", or similar. Do NOT select a column that contains only a data type name like "Boolean", "String", or "Integer" — that is not what we want. If no choices column exists, write "none".
 
 Available columns: {', '.join([f'{i+1}: {col}' for i, col in enumerate(column_names)])}
 
 Sample data:
 {sample_data}
 
-Respond in this exact format (use only the column NUMBER):
+Respond in this exact format (use only the column NUMBER, or "none"):
 Question column: [number]
-Answer column: [number]"""
+Answer column: [number]
+Response type column: [number or none]"""
 
     messages = [
         {
@@ -135,23 +140,29 @@ Answer column: [number]"""
         # Parse the response - look for numbers
         question_match = re.search(r'Question column:\s*(\d+)', answer)
         answer_match = re.search(r'Answer column:\s*(\d+)', answer)
+        response_type_match = re.search(r'Response type column:\s*(\d+)', answer)
 
         if question_match and answer_match:
             question_col_idx = int(question_match.group(1))
             answer_col_idx = int(answer_match.group(1))
+            response_type_col_idx = int(response_type_match.group(1)) if response_type_match else None
 
             # Validate indices
             if 1 <= question_col_idx <= len(column_names) and 1 <= answer_col_idx <= len(column_names):
-                logger.info(f"✓ Detected columns - Q: {column_names[question_col_idx-1]} (col {question_col_idx}), A: {column_names[answer_col_idx-1]} (col {answer_col_idx})")
-                return question_col_idx, answer_col_idx
+                rt_name = column_names[response_type_col_idx-1] if response_type_col_idx and 1 <= response_type_col_idx <= len(column_names) else None
+                # Invalidate out-of-range response type index
+                if response_type_col_idx and not (1 <= response_type_col_idx <= len(column_names)):
+                    response_type_col_idx = None
+                logger.info(f"✓ Detected columns - Q: {column_names[question_col_idx-1]} (col {question_col_idx}), A: {column_names[answer_col_idx-1]} (col {answer_col_idx}), RT: {rt_name} (col {response_type_col_idx})")
+                return question_col_idx, answer_col_idx, response_type_col_idx
             else:
                 logger.error(f"Invalid column indices detected: Q={question_col_idx}, A={answer_col_idx}")
-                return None, None
+                return None, None, None
 
-        return None, None
+        return None, None, None
     except Exception as e:
         logger.error(f"Error detecting columns: {e}")
-        return None, None
+        return None, None, None
 
 
 def get_relevant_context(question, top_k=5, similarity_threshold=0.5):
@@ -211,29 +222,44 @@ def get_relevant_context(question, top_k=5, similarity_threshold=0.5):
         return "RAG retrieval error. Use general knowledge."
 
 
-def ask_llm(question, model, context=""):
+def ask_llm(question, model, context="", response_type=""):
     """
-    Ask the LLM a question with optional RAG context
-    
+    Ask the LLM a question with optional RAG context and response type constraint.
+
     Args:
         question: The question to answer
         model: Initialized LLM model
         context: Additional context (optional)
-    
+        response_type: Expected answer format / allowed values from the spreadsheet (optional)
+
     Returns:
         Generated answer
     """
     try:
         # Get RAG context if available
         rag_context = get_relevant_context(question, top_k=5, similarity_threshold=0.5)
-        
+
         # Combine with any additional context
         full_context = f"{rag_context}\n\n{context}" if context else rag_context
+
+        # Build response format constraint section if a response type was provided
+        response_format_instruction = ""
+        if response_type and response_type.strip() and response_type.lower() not in ['nan', 'none', 'n/a', '']:
+            response_format_instruction = f"""
+RESPONSE FORMAT CONSTRAINT:
+The spreadsheet specifies the allowed response choices as: "{response_type.strip()}"
+Your answer MUST strictly conform to this — pick the single most appropriate option from the list and write ONLY that word or short phrase.
+- Do NOT add explanations, qualifications, or any extra sentences.
+- Do NOT restate the question or the options.
+- If the choices are binary (e.g. "Yes/No", "Yes, No"), output ONLY "Yes" or "No".
+- If the choices are a scale or number range, output ONLY the number.
+- If the choices include "N/A" and none of the others apply, output "N/A".
+"""
 
         messages = [
             {
                 "role": "system",
-                "content": """You are a professional document completion assistant for IBM. Your role is to fill out governance, compliance, and business documents with accurate, concise information.
+                "content": f"""You are a professional document completion assistant for IBM. Your role is to fill out governance, compliance, and business documents with accurate, concise information.
 
 INSTRUCTIONS:
 1. You are filling out forms and documents on behalf of IBM
@@ -252,7 +278,7 @@ FORMATTING:
 - For descriptive questions: Provide 1-3 sentences maximum unless more detail is clearly needed
 - For lists: Use bullet points or numbered lists as appropriate
 - Maintain professional business language throughout
-
+{response_format_instruction}
 Remember: You ARE the person filling out this document. Write answers directly as they should appear in the form."""
             },
             {
@@ -486,7 +512,7 @@ def process_document(file_path, output_path=None, context=""):
                 # Detect Q&A columns using LLM (returns 1-based indices)
                 logger.info(f"  Detecting Q&A columns...")
                 try:
-                    question_col_idx, answer_col_idx = detect_qa_columns_in_sheet(df, model)
+                    question_col_idx, answer_col_idx, response_type_col_idx = detect_qa_columns_in_sheet(df, model)
                 except Exception as e:
                     logger.error(f"  ✗ Column detection failed: {str(e)}")
                     errors.append(f"Sheet '{sheet_name}': Column detection failed - {str(e)}")
@@ -503,6 +529,12 @@ def process_document(file_path, output_path=None, context=""):
                     answer_col_name = df.columns[answer_col_idx - 1]
                     logger.info(f"  ✓ Question column: {question_col_name} (index {question_col_idx})")
                     logger.info(f"  ✓ Answer column: {answer_col_name} (index {answer_col_idx})")
+                    if response_type_col_idx:
+                        response_type_col_name = df.columns[response_type_col_idx - 1]
+                        logger.info(f"  ✓ Response type column: {response_type_col_name} (index {response_type_col_idx})")
+                    else:
+                        response_type_col_name = None
+                        logger.info(f"  ℹ No response type column detected")
                 except IndexError as e:
                     logger.error(f"  ✗ Invalid column indices: Q={question_col_idx}, A={answer_col_idx}")
                     errors.append(f"Sheet '{sheet_name}': Invalid column indices detected")
@@ -525,9 +557,22 @@ def process_document(file_path, output_path=None, context=""):
                         try:
                             question = row.iloc[question_col_idx - 1]
                             answer = row.iloc[answer_col_idx - 1]
+                            response_type_val = row.iloc[response_type_col_idx - 1] if response_type_col_idx else None
                         except IndexError as e:
                             logger.error(f"  ✗ Error accessing columns in row {excel_row}: {str(e)}")
                             continue
+
+                        # Build response type string for this row
+                        # Normalize semicolon/newline separators so the LLM receives a clean list
+                        response_type_str = ""
+                        if response_type_val is not None and pd.notna(response_type_val):
+                            rt = str(response_type_val).strip().strip('"').strip("'")
+                            if rt and rt.lower() not in ['nan', 'none', '']:
+                                # Normalize "Yes;\nNo" → "Yes, No" style
+                                rt = re.sub(r'\s*;\s*', ', ', rt)
+                                rt = re.sub(r'\s*\n\s*', ', ', rt)
+                                rt = re.sub(r',\s*,', ',', rt)  # collapse double commas
+                                response_type_str = rt.strip(', ')
 
                         if pd.isna(question) or str(question).strip() == "":
                             continue
@@ -553,8 +598,10 @@ def process_document(file_path, output_path=None, context=""):
                             logger.info(f"  Answering row {excel_row}: {question_str[:60]}...")
 
                             # Get answer from LLM with RAG
+                            if response_type_str:
+                                logger.info(f"  Response type constraint: {response_type_str}")
                             try:
-                                generated_answer = ask_llm(question_str, model, context)
+                                generated_answer = ask_llm(question_str, model, context, response_type_str)
                             except Exception as e:
                                 logger.error(f"  ✗ Failed to generate answer for row {excel_row}: {str(e)}")
                                 generated_answer = f"Error generating answer: {str(e)}"

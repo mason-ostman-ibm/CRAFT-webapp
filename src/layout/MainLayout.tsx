@@ -10,7 +10,7 @@ import {
   SkipToContent,
   Content,
 } from '@carbon/react';
-import { UserAvatar, Settings } from '@carbon/icons-react';
+import { UserAvatar } from '@carbon/icons-react';
 
 const MainLayout: React.FC = () => {
   return (
@@ -25,12 +25,9 @@ const MainLayout: React.FC = () => {
           <HeaderMenuItem href="/process">Process Files</HeaderMenuItem>
           <HeaderMenuItem href="/delta">Delta Tool</HeaderMenuItem>
           <HeaderMenuItem href="/validate">Validate</HeaderMenuItem>
-          <HeaderMenuItem href="/settings">Settings</HeaderMenuItem>
+          <HeaderMenuItem href="/team">Team</HeaderMenuItem>
         </HeaderNavigation>
         <HeaderGlobalBar>
-          <HeaderGlobalAction aria-label="Settings" onClick={() => window.location.href = '/settings'}>
-            <Settings size={20} />
-          </HeaderGlobalAction>
           <HeaderGlobalAction aria-label="User Profile">
             <UserAvatar size={20} />
           </HeaderGlobalAction>

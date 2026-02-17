@@ -7,9 +7,10 @@ using vector similarity matching with AstraDB and IBM Granite embeddings.
 
 import pandas as pd
 import openpyxl
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, PatternFill
 import openpyxl.utils
 import os
+import re
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from sentence_transformers import SentenceTransformer
 from ibm_watsonx_ai import Credentials
 from ibm_watsonx_ai.foundation_models import ModelInference
 from dotenv import load_dotenv
+from pathlib import Path
 from document_processor import detect_qa_columns_in_sheet, should_skip_sheet
 
 load_dotenv()
@@ -145,7 +147,7 @@ class DeltaService:
                     continue
 
                 # Use smart column detection (returns 1-based indices)
-                question_col_idx, answer_col_idx = detect_qa_columns_in_sheet(df, model)
+                question_col_idx, answer_col_idx, _ = detect_qa_columns_in_sheet(df, model)
 
                 if not question_col_idx or not answer_col_idx:
                     logger.warning(f"Could not detect Q&A columns in sheet: {sheet_name}")
@@ -262,7 +264,7 @@ class DeltaService:
                     continue
 
                 # Use smart column detection (returns 1-based indices)
-                question_col_idx, answer_col_idx = detect_qa_columns_in_sheet(df, model)
+                question_col_idx, answer_col_idx, response_type_col_idx = detect_qa_columns_in_sheet(df, model)
 
                 if not question_col_idx or not answer_col_idx:
                     logger.warning(f"Could not detect Q&A columns in sheet: {sheet_name}")
@@ -289,13 +291,29 @@ class DeltaService:
                             except:
                                 pass
 
+                            # Get response choices if column was detected
+                            response_choices = ''
+                            if response_type_col_idx:
+                                try:
+                                    rc_val = row.iloc[response_type_col_idx - 1]
+                                    if pd.notna(rc_val):
+                                        rc = str(rc_val).strip().strip('"').strip("'")
+                                        if rc and rc.lower() not in ['nan', 'none', '']:
+                                            rc = re.sub(r'\s*;\s*', ', ', rc)
+                                            rc = re.sub(r'\s*\n\s*', ', ', rc)
+                                            rc = re.sub(r',\s*,', ',', rc)
+                                            response_choices = rc.strip(', ')
+                                except:
+                                    pass
+
                             questions.append({
                                 'question': question_str,
                                 'sheet': sheet_name,
                                 'row': idx + 2,  # Excel row (header + 0-based index)
                                 'question_col': question_col_idx - 1,  # Store 0-based
                                 'answer_col': answer_col_idx - 1,
-                                'current_answer': current_answer
+                                'current_answer': current_answer,
+                                'response_choices': response_choices
                             })
                     except Exception as e:
                         logger.warning(f"Error extracting row {idx + 2} in sheet {sheet_name}: {e}")
@@ -501,43 +519,80 @@ Answer:"""
             logger.error(f"Error getting baseline context: {e}")
             return "Error retrieving baseline context."
     
-    def answer_with_llm(self, question, baseline_context):
+    def answer_with_llm(self, question, baseline_context, response_choices=""):
         """
-        Use LLM to generate answer based on baseline context
-        
+        Use LLM to generate answer based on baseline context.
+        Creates a fresh context for each question to avoid context buildup.
+
         Args:
             question: The question to answer
             baseline_context: Context from baseline Q&A pairs
-            
+            response_choices: Allowed answer values from the spreadsheet (optional)
+
         Returns:
             Generated answer
         """
+        logger.debug("=== answer_with_llm called ===")
+        logger.debug(f"Question: {question[:100]}")
+        logger.debug(f"Response choices: {response_choices if response_choices else 'None'}")
+        logger.debug(f"Baseline context length: {len(baseline_context)} chars")
+        
         try:
+            # Model should already be initialized in process_delta for LLM mode
             if self.watsonx_model is None:
-                self.watsonx_model = self.initialize_watsonx_model()
+                logger.error("WatsonX model is None - should have been initialized in process_delta")
+                raise Exception("WatsonX model not initialized")
             
+            logger.debug("WatsonX model confirmed initialized")
+
+            # Build response format constraint if choices were provided
+            response_format_instruction = ""
+            if response_choices and response_choices.strip() and response_choices.lower() not in ['nan', 'none', 'n/a', '']:
+                logger.debug(f"Building response format constraint for: {response_choices}")
+                response_format_instruction = f"""
+RESPONSE FORMAT CONSTRAINT:
+The spreadsheet specifies the allowed response choices as: "{response_choices.strip()}"
+Your answer MUST strictly conform to this — pick the single most appropriate option from the list and write ONLY that word or short phrase.
+- Do NOT add explanations, qualifications, or any extra sentences.
+- Do NOT restate the question or the options.
+- If the choices are binary (e.g. "Yes/No", "Yes, No"), output ONLY "Yes" or "No".
+- If the choices are a scale or number range, output ONLY the number.
+- If the choices include "N/A" and none of the others apply, output "N/A".
+"""
+            else:
+                logger.debug("No response format constraint - free-form answer")
+
+            # Create fresh messages array for each question - no context buildup
+            logger.debug("Creating fresh message context (no history buildup)")
             messages = [
                 {
                     "role": "system",
-                    "content": """You are an intelligent questionnaire completion assistant. Your role is to answer questions for the CURRENT year's questionnaire by adapting answers from PREVIOUS year's baseline questionnaire.
+                    "content": f"""You are an intelligent questionnaire completion assistant. Your role is to answer questions for the CURRENT year's questionnaire by adapting answers from PREVIOUS year's baseline questionnaire.
 
 CRITICAL INSTRUCTIONS:
 1. You are answering questions for a NEW questionnaire based on PREVIOUS answers
-2. Use the baseline examples as reference, but adapt them if needed for the current question
-3. If a question depends on other questions (e.g., "If yes to Q5, explain..."), respond with: "Dependent on previous answer - requires manual review"
-4. If the baseline shows the question was unanswered, respond with: "Not answered in baseline - requires new input"
-5. Be concise and professional - match the style of baseline answers
-6. Do NOT mention that you're using baseline data or reference materials
-7. Do NOT include meta-commentary
-8. If baseline examples are not relevant, respond with: "No relevant baseline data - requires manual completion"
+2. FIRST, evaluate if the baseline examples are truly relevant to the current question
+3. If the baseline context is NOT sufficiently relevant or similar to answer confidently, respond EXACTLY with: "INSUFFICIENT_CONTEXT"
+4. Only provide an answer if you are confident the baseline examples apply to the current question
+5. Use the baseline examples as reference, but adapt them if needed for the current question
+6. If a question depends on other questions (e.g., "If yes to Q5, explain..."), respond with: "Dependent on previous answer - requires manual review"
+7. If the baseline shows the question was unanswered, respond with: "Not answered in baseline - requires new input"
+8. Be concise and professional - match the style of baseline answers
+9. Do NOT mention that you're using baseline data or reference materials
+10. Do NOT include meta-commentary
+
+RELEVANCE CHECK:
+Before answering, ask yourself: "Do the baseline examples actually address what this question is asking?"
+If NO, respond with "INSUFFICIENT_CONTEXT" - do not attempt to answer.
+If YES, proceed with generating an appropriate answer.
 
 FORMATTING:
 - For yes/no questions: Answer "Yes" or "No" followed by brief details if needed
 - For descriptive questions: Provide 1-3 sentences maximum
 - Match the tone and format of baseline examples
 - Maintain professional business language
-
-Remember: You are filling out the current year's questionnaire using last year's answers as guidance."""
+{response_format_instruction}
+Remember: You are filling out the current year's questionnaire using last year's answers as guidance. It's better to skip a question than provide an irrelevant answer."""
                 },
                 {
                     "role": "user",
@@ -553,16 +608,29 @@ Provide your answer:"""
                 }
             ]
             
+            logger.debug(f"System prompt length: {len(messages[0]['content'])} chars")
+            logger.debug(f"User prompt length: {len(messages[1]['content'])} chars")
+            
+            # Each call gets a fresh context - no history buildup
+            logger.debug("Sending request to WatsonX model...")
             response = self.watsonx_model.chat(messages=messages)
+            logger.debug("Received response from WatsonX model")
+            
             answer = response["choices"][0]["message"]["content"]
+            logger.debug(f"Generated answer length: {len(answer)} chars")
+            logger.debug(f"Generated answer preview: {answer[:150]}")
             
             if not answer or answer.strip() == "":
+                logger.error("LLM returned empty answer")
                 return "Error: Empty response from model"
             
+            logger.debug("=== answer_with_llm completed successfully ===")
             return answer
             
         except Exception as e:
             logger.error(f"Error generating LLM answer: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.debug("Full error traceback:", exc_info=True)
             return f"Error generating answer: {str(e)}"
     
     def process_delta(self, current_file_path, threshold=None, use_llm=None):
@@ -586,6 +654,12 @@ Provide your answer:"""
         logger.info(f"Current file: {current_file_path}")
         if use_llm_mode:
             logger.info(f"Using LLM generation with baseline RAG context")
+            # Initialize WatsonX model once for LLM mode
+            if self.watsonx_model is None:
+                logger.info("Initializing WatsonX model for LLM mode...")
+                self.watsonx_model = self.initialize_watsonx_model()
+                if self.watsonx_model is None:
+                    raise Exception("Failed to initialize WatsonX model for LLM mode")
         else:
             logger.info(f"Using copy/paste with similarity threshold: {effective_threshold}")
 
@@ -637,32 +711,117 @@ Provide your answer:"""
             
             if use_llm_mode:
                 # LLM MODE: Generate answer using baseline context
+                # Only complete if retrieval similarity >= 85%
+                logger.debug(f"\n--- Processing Question {i + 1}/{len(current_questions)} (LLM Mode) ---")
+                logger.debug(f"Question: {current['question']}")
+                logger.debug(f"Sheet: {current['sheet']}, Row: {current['row']}")
+                
                 try:
-                    baseline_context = self.get_baseline_context(current['question'], top_k=5)
-                    generated_answer = self.answer_with_llm(current['question'], baseline_context)
+                    # Generate embedding and find best match
+                    logger.debug("Generating embedding for current question...")
+                    embedding = self.generate_embedding(current['question'])
+                    logger.debug(f"Embedding generated (dimension: {len(embedding)})")
                     
-                    # Update Excel
+                    # Query for similar questions
+                    logger.debug("Querying baseline collection for similar questions...")
+                    results = list(collection.find(
+                        {},
+                        sort={'$vector': embedding},
+                        limit=1,
+                        include_similarity=True
+                    ))
+                    logger.debug(f"Query returned {len(results)} results")
+                    
+                    if len(results) == 0:
+                        logger.warning(f"No baseline data found for question: {current['question'][:80]}")
+                        unmatched.append({
+                            'question': current['question'],
+                            'sheet': current['sheet'],
+                            'row': current['row'],
+                            'reason': 'No baseline data available'
+                        })
+                        logger.info(f"  [{i + 1}/{len(current_questions)}] No baseline data: {current['question'][:60]}...")
+                        continue
+                    
+                    top_match = results[0]
+                    similarity = top_match.get('$similarity', 0)
+                    logger.debug(f"Top match similarity: {similarity:.4f}")
+                    logger.debug(f"Top match question: {top_match['question_text'][:100]}")
+                    logger.debug(f"Top match answer: {top_match['answer_text'][:100]}")
+                    
+                    # Only proceed if similarity >= 85%
+                    if similarity < 0.85:
+                        logger.info(f"Similarity {similarity:.4f} below 85% threshold - skipping LLM generation")
+                        logger.debug(f"Best match was: {top_match['question_text'][:100]}")
+                        unmatched.append({
+                            'question': current['question'],
+                            'sheet': current['sheet'],
+                            'row': current['row'],
+                            'reason': f'Similarity below 85% threshold ({similarity:.3f})',
+                            'best_similarity': similarity,
+                            'best_match': top_match['question_text']
+                        })
+                        logger.info(f"  [{i + 1}/{len(current_questions)}] Below threshold ({similarity:.3f}): {current['question'][:60]}...")
+                        continue
+                    
+                    # Similarity >= 85%, generate answer with LLM
+                    logger.info(f"Similarity {similarity:.4f} >= 85% - proceeding with LLM generation")
+                    logger.debug("Retrieving baseline context (top 5 matches)...")
+                    baseline_context = self.get_baseline_context(current['question'], top_k=5)
+                    logger.debug(f"Baseline context retrieved ({len(baseline_context)} chars)")
+                    
+                    response_choices = current.get('response_choices', '')
+                    if response_choices:
+                        logger.info(f"  Response choices constraint: {response_choices}")
+                        logger.debug(f"Will apply response format rules for: {response_choices}")
+                    else:
+                        logger.debug("No response choices constraint detected")
+                    
+                    logger.debug("Calling LLM to generate answer...")
+                    generated_answer = self.answer_with_llm(current['question'], baseline_context, response_choices)
+                    logger.debug(f"LLM generated answer: {generated_answer[:200]}")
+                    
+                    # Check if LLM declined to answer due to insufficient context
+                    if generated_answer.strip() == "INSUFFICIENT_CONTEXT":
+                        logger.info(f"LLM declined to answer - context not relevant enough")
+                        logger.debug(f"LLM determined baseline context insufficient for: {current['question'][:100]}")
+                        unmatched.append({
+                            'question': current['question'],
+                            'sheet': current['sheet'],
+                            'row': current['row'],
+                            'reason': f'LLM determined context insufficient (similarity: {similarity:.3f})',
+                            'best_similarity': similarity,
+                            'best_match': top_match['question_text']
+                        })
+                        logger.info(f"  [{i + 1}/{len(current_questions)}] LLM declined ({similarity:.3f}): {current['question'][:60]}...")
+                        continue
+                    
+                    # Update Excel with highlighting for LLM mode
+                    logger.debug(f"Updating Excel cell at sheet={current['sheet']}, row={current['row']}, col={current['answer_col']}")
                     self.update_excel_cell(workbook, current['sheet'], current['row'],
-                                         current['answer_col'], generated_answer)
+                                         current['answer_col'], generated_answer, highlight=True)
+                    logger.debug("Cell updated with yellow highlighting")
                     
                     matches.append({
                         'current_question': current['question'],
                         'current_sheet': current['sheet'],
                         'current_row': current['row'],
-                        'matched_question': 'LLM Generated',
-                        'similarity_score': 1.0,
+                        'matched_question': top_match['question_text'],
+                        'similarity_score': similarity,
                         'confidence': 'LLM',
                         'answer_reused': generated_answer[:100] + '...' if len(generated_answer) > 100 else generated_answer,
-                        'baseline_sheet': 'Multiple',
-                        'baseline_row': 0,
-                        'llm_verified': True
+                        'baseline_sheet': top_match['metadata']['sheet_name'],
+                        'baseline_row': top_match['metadata']['row_number'],
+                        'llm_verified': False
                     })
                     
                     high_confidence_count += 1
-                    logger.info(f"  [{i + 1}/{len(current_questions)}] LLM generated: {current['question'][:60]}...")
+                    logger.info(f"  [{i + 1}/{len(current_questions)}] ✓ LLM generated ({similarity:.3f}): {current['question'][:60]}...")
                     
                 except Exception as e:
                     logger.error(f"  [{i + 1}/{len(current_questions)}] LLM error: {str(e)}")
+                    logger.error(f"Error type: {type(e).__name__}")
+                    logger.debug(f"Full error details:", exc_info=True)
                     unmatched.append({
                         'question': current['question'],
                         'sheet': current['sheet'],
@@ -800,12 +959,16 @@ Provide your answer:"""
             'output_filename': output_filename
         }
     
-    def update_excel_cell(self, workbook, sheet_name, row, col, value):
-        """Update a cell in the Excel workbook"""
+    def update_excel_cell(self, workbook, sheet_name, row, col, value, highlight=False):
+        """Update a cell in the Excel workbook with optional highlighting"""
         worksheet = workbook[sheet_name]
         cell = worksheet.cell(row=row, column=col + 1)  # Excel is 1-indexed
         cell.value = value
         cell.alignment = Alignment(wrap_text=True, vertical='top')
+        
+        # Add yellow highlight for LLM-generated answers
+        if highlight:
+            cell.fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
     
     def get_baseline_info(self):
         """Get information about the current baseline"""

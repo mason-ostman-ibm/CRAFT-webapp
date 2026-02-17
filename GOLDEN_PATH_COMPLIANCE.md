@@ -231,12 +231,7 @@ While maintaining Golden Path compliance, excel-ai-processor adds:
 - IBM Granite embeddings
 - **Does not affect deployment** - runs in same container
 
-### 2. BYOK (Bring Your Own Key)
-- User-specific API key storage
-- Settings page for configuration
-- **Uses same secret pattern** as other credentials
-
-### 3. Watson Orchestrate
+### 2. Watson Orchestrate
 - Embedded chatbot component
 - **No deployment changes** - frontend feature
 
@@ -285,7 +280,7 @@ The application follows the exact same deployment pattern as your-projects and f
 The only differences are:
 1. Additional Python dependencies (handled in Dockerfile)
 2. Additional secrets for WatsonX (same pattern as Instana)
-3. Additional features (BYOK, Watson Orchestrate) that don't affect deployment
+3. Additional features (Watson Orchestrate) that don't affect deployment
 
 ## Quick Deploy Commands
 
