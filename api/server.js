@@ -10,10 +10,12 @@ import multer from 'multer';
 import xlsx from 'xlsx';
 import fs from 'fs/promises';
 import { createReadStream } from 'fs';
+import { spawn } from 'child_process';
 import { instanaTrackingMiddleware, trackEvent, trackError } from './instana-middleware.js';
 
 // Python service URL for Delta Tool
 const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:5000';
+const PYTHON_SERVICE_PORT = process.env.PYTHON_SERVICE_PORT || '5000';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1017,6 +1019,113 @@ app.get('*', (req, res) => {
 });
 
 /* ========================================================================
+ * PYTHON SERVICE MANAGEMENT
+ * ===================================================================== */
+
+let pythonProcess = null;
+
+/**
+ * Start Python Flask service as a child process
+ */
+function startPythonService() {
+  const pythonServicePath = path.join(__dirname, 'python-service', 'flask_api.py');
+  const pythonServiceDir = path.join(__dirname, 'python-service');
+  
+  console.log('🐍 Starting Python service...');
+  console.log(`   Path: ${pythonServicePath}`);
+  console.log(`   Port: ${PYTHON_SERVICE_PORT}`);
+  
+  // Check if Python service file exists
+  try {
+    const fs = require('fs');
+    if (!fs.existsSync(pythonServicePath)) {
+      console.warn('⚠️  Python service not found. Skipping Python service startup.');
+      console.warn('   Some features (Delta Tool, RAG processing) will not be available.');
+      return null;
+    }
+  } catch (error) {
+    console.warn('⚠️  Could not check for Python service:', error.message);
+    return null;
+  }
+  
+  pythonProcess = spawn('python3', [pythonServicePath], {
+    cwd: pythonServiceDir,
+    env: {
+      ...process.env,
+      PYTHON_SERVICE_PORT: PYTHON_SERVICE_PORT,
+      PYTHONUNBUFFERED: '1' // Ensure real-time output
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  
+  pythonProcess.stdout.on('data', (data) => {
+    const output = data.toString().trim();
+    if (output) {
+      console.log(`[Python] ${output}`);
+    }
+  });
+  
+  pythonProcess.stderr.on('data', (data) => {
+    const output = data.toString().trim();
+    if (output && !output.includes('WARNING')) {
+      console.error(`[Python Error] ${output}`);
+    }
+  });
+  
+  pythonProcess.on('error', (error) => {
+    console.error('❌ Failed to start Python service:', error.message);
+    console.error('   Some features (Delta Tool, RAG processing) will not be available.');
+  });
+  
+  pythonProcess.on('exit', (code, signal) => {
+    if (code !== null && code !== 0) {
+      console.error(`❌ Python service exited with code ${code}`);
+    } else if (signal) {
+      console.log(`🐍 Python service terminated by signal ${signal}`);
+    }
+    pythonProcess = null;
+  });
+  
+  // Give Python service time to start
+  setTimeout(() => {
+    if (pythonProcess && !pythonProcess.killed) {
+      console.log('✅ Python service started successfully');
+    }
+  }, 2000);
+  
+  return pythonProcess;
+}
+
+/**
+ * Graceful shutdown handler
+ */
+function gracefulShutdown(signal) {
+  console.log(`\n${signal} received. Shutting down gracefully...`);
+  
+  if (pythonProcess && !pythonProcess.killed) {
+    console.log('🐍 Stopping Python service...');
+    pythonProcess.kill('SIGTERM');
+    
+    // Force kill after 5 seconds if not stopped
+    setTimeout(() => {
+      if (pythonProcess && !pythonProcess.killed) {
+        console.log('🐍 Force stopping Python service...');
+        pythonProcess.kill('SIGKILL');
+      }
+    }, 5000);
+  }
+  
+  // Exit after cleanup
+  setTimeout(() => {
+    process.exit(0);
+  }, 6000);
+}
+
+// Register shutdown handlers
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+/* ========================================================================
  * START SERVER
  * ===================================================================== */
 
@@ -1025,6 +1134,9 @@ app.listen(PORT, () => {
   console.log(`📊 Processing Excel files with WatsonX.ai`);
   console.log(`📈 Instana monitoring enabled`);
   console.log(`🌐 Serving frontend from /dist`);
+  
+  // Start Python service after Node.js server is ready
+  startPythonService();
 });
 
 // Made with Bob
