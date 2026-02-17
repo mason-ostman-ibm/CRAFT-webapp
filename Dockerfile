@@ -1,56 +1,80 @@
-# Multi-stage build for Excel AI Processor fullstack app
-FROM node:20-alpine AS builder
+# ============================================================================
+# Multi-stage Production Build for Excel AI Processor
+# ============================================================================
+
+# Stage 1: Build Frontend
+FROM node:20-alpine AS frontend-builder
 
 WORKDIR /build
 
-# Copy root package files for frontend
+# Copy package files and install dependencies
 COPY package*.json ./
-RUN npm ci
-
-# Copy frontend source
-COPY . .
-
-# Build frontend
-RUN npm run build
-
-# Build backend
-WORKDIR /build/api
-COPY api/package*.json ./
 RUN npm ci --only=production
 
-# Final stage
+# Copy source and build
+COPY . .
+RUN npm run build
+
+# Stage 2: Build Backend Dependencies
+FROM node:20-alpine AS backend-builder
+
+WORKDIR /build
+
+# Copy package files and install production dependencies
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Stage 3: Python Dependencies
+FROM python:3.11-alpine AS python-builder
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apk add --no-cache gcc musl-dev linux-headers
+
+# Copy and install Python dependencies
+COPY api/python-service/requirements.txt ./
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# Stage 4: Final Production Image
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy frontend build
-COPY --from=builder /build/dist ./dist
-
-# Copy backend
-COPY --from=builder /build/api ./api
-COPY api/server.js ./api/
-COPY api/instana.js ./api/
-COPY api/instana-middleware.js ./api/
-
-# Copy Python service for RAG processing
-COPY api/python-service ./api/python-service
-
-# Install backend dependencies in final image
-WORKDIR /app/api
-COPY api/package*.json ./
-RUN npm ci --only=production
-
-# Install Python and dependencies for RAG service
+# Install Python runtime (no build tools needed)
 RUN apk add --no-cache python3 py3-pip
-WORKDIR /app/api/python-service
-RUN pip3 install --no-cache-dir -r requirements.txt
 
-WORKDIR /app
+# Copy frontend build from builder
+COPY --from=frontend-builder /build/dist ./dist
 
-# Expose port
-EXPOSE 3000
+# Copy backend files
+COPY api ./api
 
-# Start the backend server (which also serves the frontend)
-CMD ["node", "api/server.js"]
+# Copy backend node_modules from builder
+COPY --from=backend-builder /build/node_modules ./node_modules
+
+# Copy Python dependencies from builder
+COPY --from=python-builder /install /usr/local
+
+# Create necessary directories
+RUN mkdir -p uploads && \
+    chmod 755 uploads
+
+# Add non-root user for security
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001 && \
+    chown -R nodejs:nodejs /app
+
+USER nodejs
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+
+# Expose ports
+EXPOSE 3000 5000
+
+# Start services using a simple startup script
+CMD ["sh", "-c", "cd /app/api/python-service && python3 flask_api.py & cd /app && node api/server.js"]
 
 # Made with Bob

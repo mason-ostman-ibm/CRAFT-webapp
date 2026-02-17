@@ -5,9 +5,11 @@ metadata:
   namespace: content-studio-platform
   labels:
     app: excel-ai-processor
+    app.kubernetes.io/name: excel-ai-processor
+    app.kubernetes.io/component: web-application
     app.kubernetes.io/managed-by: Helm
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: excel-ai-processor
@@ -15,57 +17,33 @@ spec:
     metadata:
       labels:
         app: excel-ai-processor
+        app.kubernetes.io/name: excel-ai-processor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
     spec:
+      # Security context for the pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      
       containers:
-        # Frontend Container (React + Vite)
-        - name: frontend
-          image: 'image-registry.openshift-image-registry.svc:5000/content-studio-platform/excel-ai-processor:latest'
-          ports:
-            - containerPort: 8080
-              protocol: TCP
-              name: frontend
-          env:
-            - name: PORT
-              value: '8080'
-          envFrom:
-            - configMapRef:
-                name: excel-ai-processor-config
-          resources:
-            requests:
-              memory: "256Mi"
-              cpu: "100m"
-            limits:
-              memory: "512Mi"
-              cpu: "500m"
-          livenessProbe:
-            httpGet:
-              path: /
-              port: 8080
-            initialDelaySeconds: 30
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /
-              port: 8080
-            initialDelaySeconds: 5
-            periodSeconds: 5
-          terminationMessagePath: /dev/termination-log
-          terminationMessagePolicy: File
-          imagePullPolicy: Always
-        
-        # Backend API Server Container (Express.js)
+        # Backend API Server Container (Express.js + serves frontend)
         - name: backend
           image: 'image-registry.openshift-image-registry.svc:5000/content-studio-platform/excel-ai-processor:latest'
-          command: ["node", "api/server.js"]
           ports:
             - containerPort: 3000
               protocol: TCP
-              name: backend
+              name: http
           env:
             - name: PORT
               value: '3000'
             - name: NODE_ENV
               value: 'production'
+            - name: PYTHON_SERVICE_URL
+              value: 'http://localhost:5000'
             - name: INSTANA_REPORTING_URL
               value: 'https://ibmdevsandbox-instanaibm.instana.io'
             - name: INSTANA_AGENT_KEY
@@ -73,23 +51,36 @@ spec:
                 secretKeyRef:
                   name: instana-secrets
                   key: agent-key
-            - name: IBM_WATSONX_API_KEY
+                  optional: true
+            - name: WATSONX_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: watsonx-secrets
                   key: api-key
-            - name: IBM_WATSONX_PROJECT_ID
+            - name: WATSONX_PROJECT_ID
               valueFrom:
                 secretKeyRef:
                   name: watsonx-secrets
                   key: project-id
+            - name: ASTRA_DB_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: astra-secrets
+                  key: api-endpoint
+                  optional: true
+            - name: ASTRA_DB_APPLICATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: astra-secrets
+                  key: application-token
+                  optional: true
           envFrom:
             - configMapRef:
                 name: excel-ai-processor-config
           resources:
             requests:
               memory: "512Mi"
-              cpu: "200m"
+              cpu: "250m"
             limits:
               memory: "1Gi"
               cpu: "1000m"
@@ -97,17 +88,118 @@ spec:
             httpGet:
               path: /api/health
               port: 3000
-            initialDelaySeconds: 30
-            periodSeconds: 10
+              scheme: HTTP
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /api/health
               port: 3000
-            initialDelaySeconds: 5
-            periodSeconds: 5
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+              scheme: HTTP
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/uploads
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: false
+        
+        # Python Service Container (Flask)
+        - name: python-service
+          image: 'image-registry.openshift-image-registry.svc:5000/content-studio-platform/excel-ai-processor:latest'
+          command: ["sh", "-c", "cd /app/api/python-service && python3 flask_api.py"]
+          ports:
+            - containerPort: 5000
+              protocol: TCP
+              name: python
+          env:
+            - name: PYTHON_SERVICE_PORT
+              value: '5000'
+            - name: WATSONX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: watsonx-secrets
+                  key: api-key
+            - name: WATSONX_PROJECT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: watsonx-secrets
+                  key: project-id
+            - name: ASTRA_DB_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: astra-secrets
+                  key: api-endpoint
+                  optional: true
+            - name: ASTRA_DB_APPLICATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: astra-secrets
+                  key: application-token
+                  optional: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+              scheme: HTTP
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+              scheme: HTTP
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 5000
+              scheme: HTTP
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: false
         
         # OAuth2 Proxy Container
         - name: oauth2-proxy
@@ -123,7 +215,7 @@ spec:
             - '--provider=oidc'
             - '--oidc-issuer-url=https://login.w3.ibm.com/oidc/endpoint/default'
             - '--scope=openid email profile'
-            - '--upstream=http://localhost:8080'
+            - '--upstream=http://localhost:3000'
             - '--http-address=0.0.0.0:4180'
             - '--redirect-url=https://excel-ai-processor-np.dinero.techzone.ibm.com/oauth2/callback'
             - '--set-authorization-header=true'
@@ -131,7 +223,9 @@ spec:
             - '--set-xauthrequest=true'
             - '--email-domain=*'
             - '--skip-provider-button=true'
-            - '--skip-auth-regex=^/api/.*'
+            - '--skip-auth-regex=^/api/health'
+            - '--cookie-secure=true'
+            - '--cookie-httponly=true'
           resources:
             requests:
               memory: "128Mi"
@@ -139,19 +233,44 @@ spec:
             limits:
               memory: "256Mi"
               cpu: "200m"
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 4180
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 4180
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      
+      volumes:
+        - name: uploads
+          emptyDir: {}
+      
       restartPolicy: Always
       terminationGracePeriodSeconds: 30
       dnsPolicy: ClusterFirst
-      securityContext: {}
       schedulerName: default-scheduler
+      
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 25%
-      maxSurge: 25%
+      maxUnavailable: 1
+      maxSurge: 1
   revisionHistoryLimit: 10
   progressDeadlineSeconds: 600
 

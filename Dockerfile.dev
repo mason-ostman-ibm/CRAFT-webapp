@@ -1,0 +1,59 @@
+# Development Dockerfile with multi-stage builds for each service
+
+# ============================================================================
+# Frontend Stage (Vite Development Server)
+# ============================================================================
+FROM node:20-alpine AS frontend
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+
+EXPOSE 5173
+
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+
+# ============================================================================
+# Backend Stage (Node.js/Express API)
+# ============================================================================
+FROM node:20-alpine AS backend
+
+WORKDIR /app
+
+# Copy root package files
+COPY package*.json ./
+RUN npm ci
+
+# Copy API files
+COPY api ./api
+
+# Create uploads directory
+RUN mkdir -p uploads
+
+EXPOSE 3000
+
+CMD ["node", "api/server.js"]
+
+# ============================================================================
+# Python Service Stage (Flask API)
+# ============================================================================
+FROM python:3.11-alpine AS python-service
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apk add --no-cache gcc musl-dev linux-headers
+
+# Copy Python service files
+COPY api/python-service ./api/python-service
+
+# Install Python dependencies
+WORKDIR /app/api/python-service
+RUN pip install --no-cache-dir -r requirements.txt
+
+EXPOSE 5000
+
+CMD ["python", "flask_api.py"]
