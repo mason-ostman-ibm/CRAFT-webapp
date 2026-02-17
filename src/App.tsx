@@ -8,7 +8,7 @@ import HomePage from "./pages/HomePage";
 import ProcessPage from "./pages/ProcessPage";
 import DeltaPage from "./pages/DeltaPage";
 import ValidationPage from "./pages/ValidationPage";
-import SettingsPage from "./pages/SettingsPage";
+import TeamPage from "./pages/TeamPage";
 import NotFound from "./pages/NotFound";
 import WatsonOrchestrate from "./components/WatsonOrchestrate";
 
@@ -25,7 +25,7 @@ const App: React.FC = () => (
             <Route path="process" element={<ProcessPage />} />
             <Route path="delta" element={<DeltaPage />} />
             <Route path="validate" element={<ValidationPage />} />
-            <Route path="settings" element={<SettingsPage />} />
+            <Route path="team" element={<TeamPage />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>
