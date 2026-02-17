@@ -2,6 +2,18 @@
 
 AI-powered Excel processing application for ATLs and MDs using IBM Carbon Design System and WatsonX.ai.
 
+## 🚀 New to This Project?
+
+**Start here:** [GETTING_STARTED.md](./GETTING_STARTED.md) - Complete guide for running on your local machine
+
+This guide walks you through:
+- Installing prerequisites
+- Getting API credentials
+- Setting up the project
+- Running the application
+- Using the features
+- Troubleshooting common issues
+
 ## Overview
 
 Excel AI Processor is a modern web application designed to help business leaders streamline their Excel questionnaire workflow. The application leverages IBM WatsonX.ai to automatically generate professional answers for Excel-based questionnaires, reducing manual effort and improving consistency.
@@ -41,67 +53,88 @@ Excel AI Processor is a modern web application designed to help business leaders
 
 ### Prerequisites
 
-- Node.js 18+ 
-- npm or yarn
-- IBM Cloud account with WatsonX.ai access
-- Instana account (optional, for monitoring)
+- **Node.js 18+** - [Download](https://nodejs.org/)
+- **Python 3.8+** - [Download](https://www.python.org/)
+- **npm 9+** - Comes with Node.js
+- **IBM Cloud account** with WatsonX.ai access
+- **Instana account** (optional, for monitoring)
 
-### Installation
+### Quick Setup
 
-1. Clone the repository:
+The fastest way to get started:
+
 ```bash
+# 1. Clone the repository
 git clone <repository-url>
 cd excel-ai-processor
+
+# 2. Run automated setup
+./setup.sh
+
+# 3. Configure credentials
+# Edit .env and api/python-service/.env with your API keys
+
+# 4. Start all services
+npm run dev:all
 ```
 
-2. Install dependencies:
-```bash
-npm install
-```
+### Detailed Setup
 
-3. Copy environment variables:
-```bash
-cp .env.example .env
-```
-
-4. Configure your `.env` file with:
-   - WatsonX.ai credentials
-   - Instana configuration (optional)
-   - Other application settings
+For step-by-step instructions, see **[SETUP.md](./SETUP.md)**.
 
 ### Development
 
-**⚠️ IMPORTANT**: Always use `npm run dev:all` to start both services!
+**⚠️ IMPORTANT**: Always use `npm run dev:all` to start all three services!
 
 ```bash
-# ✅ CORRECT - Start both frontend and backend
+# ✅ CORRECT - Start frontend, backend, and Python service
 npm run dev:all
 ```
 
 This starts:
-- ✅ Frontend: http://localhost:5173
-- ✅ Backend API: http://localhost:3000
+- ✅ Frontend (Vite): http://localhost:5173
+- ✅ Backend API (Express): http://localhost:3000
+- ✅ Python Service (Flask): http://localhost:5000
 
-**Common Error**: Running `npm run dev` alone will cause `ECONNREFUSED` errors because the backend won't be running.
+**Common Error**: Running `npm run dev` alone will cause `ECONNREFUSED` errors because the backend and Python service won't be running.
 
-For separate terminals:
+### Alternative: Run Services Separately
+
 ```bash
 # Terminal 1 - Backend
 npm run server
 
 # Terminal 2 - Frontend
 npm run dev
+
+# Terminal 3 - Python Service
+npm run python-service
 ```
 
-**Troubleshooting**: If you see connection errors, see [STARTUP_TROUBLESHOOTING.md](./STARTUP_TROUBLESHOOTING.md)
+### Docker Development
+
+```bash
+# Start all services with Docker Compose
+npm run docker:dev:build
+
+# Stop services
+npm run docker:dev:down
+```
 
 ### Building for Production
 
 ```bash
+# Build frontend
 npm run build
+
+# Build Docker image
+npm run docker:prod:build
+
+# Run production container
+npm run docker:prod:run
 ```
 
-The built files will be in the `dist` directory.
+**Troubleshooting**: If you see connection errors, see [STARTUP_TROUBLESHOOTING.md](./STARTUP_TROUBLESHOOTING.md) or [SETUP.md](./SETUP.md)
 
 ## Project Structure
 

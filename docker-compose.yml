@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # Frontend Development Server (Vite)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      target: frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+      - ./index.html:/app/index.html
+      - ./vite.config.ts:/app/vite.config.ts
+      - ./tsconfig.json:/app/tsconfig.json
+    environment:
+      - NODE_ENV=development
+    command: npm run dev
+    networks:
+      - app-network
+
+  # Backend API Server (Node.js/Express)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      target: backend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./api:/app/api
+      - ./uploads:/app/uploads
+      - ./.env:/app/.env
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - PYTHON_SERVICE_URL=http://python-service:5000
+    env_file:
+      - .env
+    depends_on:
+      - python-service
+    networks:
+      - app-network
+
+  # Python Service (Flask)
+  python-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      target: python-service
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./api/python-service:/app/api/python-service
+    environment:
+      - PYTHON_SERVICE_PORT=5000
+    env_file:
+      - ./api/python-service/.env
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  node_modules:
+  python_venv:
