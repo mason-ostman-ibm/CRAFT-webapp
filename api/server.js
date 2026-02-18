@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import xlsx from 'xlsx';
 import fs from 'fs/promises';
-import { createReadStream } from 'fs';
+import { createReadStream, existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { instanaTrackingMiddleware, trackEvent, trackError } from './instana-middleware.js';
 
@@ -1023,15 +1023,9 @@ function startPythonService() {
   console.log(`   Port: ${PYTHON_SERVICE_PORT}`);
   
   // Check if Python service file exists
-  try {
-    const fs = require('fs');
-    if (!fs.existsSync(pythonServicePath)) {
-      console.warn('⚠️  Python service not found. Skipping Python service startup.');
-      console.warn('   Some features (Delta Tool, RAG processing) will not be available.');
-      return null;
-    }
-  } catch (error) {
-    console.warn('⚠️  Could not check for Python service:', error.message);
+  if (!existsSync(pythonServicePath)) {
+    console.warn('⚠️  Python service not found. Skipping Python service startup.');
+    console.warn('   Some features (Delta Tool, RAG processing) will not be available.');
     return null;
   }
   
