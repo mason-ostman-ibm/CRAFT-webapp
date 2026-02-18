@@ -41,7 +41,11 @@ app.use(express.json({ limit: '10mb' }));
 app.use(instanaTrackingMiddleware);
 
 // Serve static files from the React app build
-app.use(express.static(path.join(__dirname, '../dist')));
+// In Golden Path deployment, frontend is at /app/web/dist
+const frontendPath = process.env.NODE_ENV === 'production'
+  ? '/app/web/dist'
+  : path.join(__dirname, '../dist');
+app.use(express.static(frontendPath));
 
 // Configure multer for file uploads
 // Use /tmp in production (containerized) or local uploads in development
@@ -1143,7 +1147,10 @@ app.get("*", (req, res) => {
     }
     // Serve React app for all other routes
     else {
-        const indexFile = path.join(__dirname, '../dist/index.html');
+        // In Golden Path deployment, frontend is at /app/web/dist
+        const indexFile = process.env.NODE_ENV === 'production'
+            ? '/app/web/dist/index.html'
+            : path.join(__dirname, '../dist/index.html');
         res.sendFile(indexFile, (err) => {
             if (err) {
                 console.error('Error serving index.html:', err);
