@@ -11,7 +11,6 @@
     "python-service": "cd api/python-service && source venv/bin/activate && python flask_api.py",
     "dev:all": "concurrently --names \"VITE,API,PYTHON\" --prefix-colors \"cyan,green,yellow\" \"npm run dev\" \"npm run server\" \"npm run python-service\"",
     "build": "vite build",
-    "postinstall": "npm run build",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest",
