@@ -5,8 +5,6 @@ oauth2: auto
 backend:
   path: api
   port: 3000
-  # The Node.js server will automatically start the Python service
-  command: node server.js
 env:
   # Instana SaaS Configuration
   INSTANA_REPORTING_URL: "https://ibmdevsandbox-instanaibm.instana.io"
