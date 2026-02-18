@@ -1017,6 +1017,7 @@ let pythonProcess = null;
 function startPythonService() {
   const pythonServicePath = path.join(__dirname, 'python-service', 'flask_api.py');
   const pythonServiceDir = path.join(__dirname, 'python-service');
+  const requirementsPath = path.join(pythonServiceDir, 'requirements.txt');
   
   console.log('🐍 Starting Python service...');
   console.log(`   Path: ${pythonServicePath}`);
@@ -1027,6 +1028,22 @@ function startPythonService() {
     console.warn('⚠️  Python service not found. Skipping Python service startup.');
     console.warn('   Some features (Delta Tool, RAG processing) will not be available.');
     return null;
+  }
+  
+  // Install Python dependencies if requirements.txt exists
+  if (existsSync(requirementsPath)) {
+    console.log('📦 Installing Python dependencies...');
+    try {
+      const { execSync } = require('child_process');
+      execSync(`pip3 install --no-cache-dir -r "${requirementsPath}"`, {
+        cwd: pythonServiceDir,
+        stdio: 'inherit'
+      });
+      console.log('✅ Python dependencies installed');
+    } catch (error) {
+      console.error('❌ Failed to install Python dependencies:', error.message);
+      console.warn('   Python service may not work correctly.');
+    }
   }
   
   pythonProcess = spawn('python3', [pythonServicePath], {

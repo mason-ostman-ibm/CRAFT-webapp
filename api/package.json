@@ -6,8 +6,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "node server.js",
-    "postinstall": "if [ -f python-service/requirements.txt ]; then pip3 install --no-cache-dir -r python-service/requirements.txt || true; fi"
+    "start": "node server.js"
   },
   "dependencies": {
     "@instana/collector": "^4.24.0",
