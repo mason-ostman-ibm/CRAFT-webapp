@@ -1003,29 +1003,7 @@ app.get('/api/python/download/:filename', async (req, res) => {
  * SPA FALLBACK - Must be BEFORE error handling!
  * ===================================================================== */
 
-// Serve React app for all other routes (SPA fallback)
-app.get('*', (req, res) => {
-  try {
-    const indexPath = path.join(__dirname, '../dist/index.html');
-    res.sendFile(indexPath);
-  } catch (error) {
-    // In development, dist folder might not exist yet
-    res.status(200).send(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Excel AI Processor</title>
-        </head>
-        <body>
-          <h1>Excel AI Processor API Server</h1>
-          <p>Backend is running on port ${PORT}</p>
-          <p>Run <code>npm run dev</code> in another terminal to start the frontend.</p>
-          <p>Or run <code>npm run dev:all</code> to start both services.</p>
-        </body>
-      </html>
-    `);
-  }
-});
+// OLD CATCH-ALL ROUTE REMOVED - Using the new one at the end of the file
 
 /* ========================================================================
  * PYTHON SERVICE MANAGEMENT
