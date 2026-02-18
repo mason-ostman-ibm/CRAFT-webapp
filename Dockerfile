@@ -74,7 +74,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 # Expose ports
 EXPOSE 3000 5000
 
-# Start services using a simple startup script
-CMD ["sh", "-c", "cd /app/api/python-service && python3 flask_api.py & cd /app && node api/server.js"]
+# Start Node.js server (which will start Python service via server.js)
+CMD ["node", "api/server.js"]
 
 # Made with Bob
