@@ -44,13 +44,18 @@ app.use(instanaTrackingMiddleware);
 app.use(express.static(path.join(__dirname, '../dist')));
 
 // Configure multer for file uploads
+// Use /tmp in production (containerized) or local uploads in development
+const uploadDir = process.env.NODE_ENV === 'production'
+  ? '/tmp/uploads'
+  : path.join(__dirname, '../uploads');
+
 const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../uploads');
     try {
       await fs.mkdir(uploadDir, { recursive: true });
       cb(null, uploadDir);
     } catch (error) {
+      console.error('Error creating upload directory:', error);
       cb(error);
     }
   },
