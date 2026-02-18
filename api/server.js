@@ -10,7 +10,7 @@ import multer from 'multer';
 import xlsx from 'xlsx';
 import fs from 'fs/promises';
 import { createReadStream, existsSync } from 'fs';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { instanaTrackingMiddleware, trackEvent, trackError } from './instana-middleware.js';
 
 // Python service URL for Delta Tool
@@ -1034,7 +1034,6 @@ function startPythonService() {
   if (existsSync(requirementsPath)) {
     console.log('📦 Installing Python dependencies...');
     try {
-      const { execSync } = require('child_process');
       execSync(`pip3 install --no-cache-dir -r "${requirementsPath}"`, {
         cwd: pythonServiceDir,
         stdio: 'inherit'
