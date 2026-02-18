@@ -2,7 +2,6 @@ kind: fullstack
 public: true
 port: 3000
 oauth2: auto
-dockerfile: Dockerfile
 backend:
   path: api
   port: 3000
