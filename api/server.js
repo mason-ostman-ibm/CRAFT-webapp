@@ -1126,6 +1126,29 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 /* ========================================================================
+ * SERVE REACT APP (CATCH-ALL ROUTE)
+ * This MUST be the last route defined - it catches all non-API routes
+ * ===================================================================== */
+
+// Handle React Router - send all other requests to index.html
+app.get("*", (req, res) => {
+    // Don't fallback for /api paths - they should return JSON 404
+    if (req.path.startsWith('/api/')) {
+        res.status(404).json({ error: 'API endpoint not found', path: req.path });
+    }
+    // Serve React app for all other routes
+    else {
+        const indexFile = path.join(__dirname, '../dist/index.html');
+        res.sendFile(indexFile, (err) => {
+            if (err) {
+                console.error('Error serving index.html:', err);
+                res.status(500).send('Error loading application');
+            }
+        });
+    }
+});
+
+/* ========================================================================
  * START SERVER
  * ===================================================================== */
 
@@ -1134,6 +1157,7 @@ app.listen(PORT, () => {
   console.log(`📊 Processing Excel files with WatsonX.ai`);
   console.log(`📈 Instana monitoring enabled`);
   console.log(`🌐 Serving frontend from /dist`);
+  console.log(`🌐 Main app: http://localhost:${PORT}/`);
   
   // Start Python service after Node.js server is ready
   startPythonService();
