@@ -44,8 +44,8 @@ WORKDIR /app
 # Install Python runtime (no build tools needed)
 RUN apk add --no-cache python3 py3-pip
 
-# Copy frontend build from builder
-COPY --from=frontend-builder /build/dist ./dist
+# Copy frontend build from builder to /app/web/dist (Golden Path structure)
+COPY --from=frontend-builder /build/dist ./web/dist
 
 # Copy backend files
 COPY api ./api
@@ -56,9 +56,9 @@ COPY --from=backend-builder /build/node_modules ./node_modules
 # Copy Python dependencies from builder
 COPY --from=python-builder /install /usr/local
 
-# Create necessary directories
-RUN mkdir -p uploads && \
-    chmod 755 uploads
+# Create necessary directories with proper permissions
+RUN mkdir -p /tmp/uploads && \
+    chmod 777 /tmp/uploads
 
 # Add non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
