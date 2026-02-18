@@ -4,6 +4,7 @@ AI-powered Excel processing application for ATLs and MDs using IBM Carbon Design
 
 ## New to This Project?
 
+
 **Start here:** [GETTING_STARTED.md](./GETTING_STARTED.md) - Complete guide for running on your local machine
 
 This guide walks you through:
