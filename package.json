@@ -8,8 +8,7 @@
     "dev": "vite",
     "start": "node api/server.js",
     "server": "node api/server.js",
-    "python-service": "cd api/python-service && source venv/bin/activate && python flask_api.py",
-    "dev:all": "concurrently --names \"VITE,API,PYTHON\" --prefix-colors \"cyan,green,yellow\" \"npm run dev\" \"npm run server\" \"npm run python-service\"",
+    "dev:all": "concurrently --names \"VITE,API\" --prefix-colors \"cyan,green\" \"npm run dev\" \"npm run server\"",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -22,8 +21,8 @@
     "docker:dev:down": "docker-compose down",
     "docker:prod:build": "docker build -t excel-ai-processor:latest .",
     "docker:prod:run": "docker run -p 3000:3000 --env-file .env excel-ai-processor:latest",
-    "clean": "rm -rf node_modules dist api/python-service/venv uploads/*",
-    "clean:install": "npm run clean && npm install && cd api/python-service && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt"
+    "clean": "rm -rf node_modules dist uploads/*",
+    "clean:install": "npm run clean && npm install"
   },
   "dependencies": {
     "@carbon/icons-react": "^11.63.0",

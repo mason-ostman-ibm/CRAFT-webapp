@@ -7,10 +7,23 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies
 node_modules
 dist
 dist-ssr
 *.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+api/python-service/venv/
+api/python-service/.env
+*.egg-info/
+.pytest_cache/
+.coverage
 
 # Editor directories and files
 .vscode/*
@@ -27,17 +40,36 @@ dist-ssr
 .env
 .env.local
 .env.production
+.env.development.local
+.env.test.local
+.env.production.local
 
 # Build outputs
 build/
 web/dist/
 
-# Uploads
-uploads/
+# Uploads and temporary files
+uploads/*
+!uploads/.gitkeep
 temp/
+*.tmp
 
 # Test coverage
 coverage/
+.nyc_output/
 
 # OS files
 Thumbs.db
+.DS_Store
+
+# Docker
+.dockerignore
+
+# IDE
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+.loadpath

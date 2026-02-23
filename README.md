@@ -1,4 +1,4 @@
-# Excel AI Processor
+# CRAFT - Compliance Risk Assessment Framework Tool
 
 AI-powered Excel processing application for ATLs and MDs using IBM Carbon Design System and WatsonX.ai.
 
@@ -15,9 +15,19 @@ This guide walks you through:
 - Using the features
 - Troubleshooting common issues
 
+## 📐 Architecture
+
+**See:** [ARCHITECTURE.md](./ARCHITECTURE.md) - Complete architecture documentation
+
+This application uses a **microservices architecture**:
+- **React Frontend + Node.js Backend**: Deployed on OpenShift/DINERO
+- **Python Microservice**: Deployed on IBM Code Engine (separate deployment)
+
+The Python microservice is deployed separately because the OpenShift cron job doesn't support Python deployments.
+
 ## Overview
 
-Excel AI Processor is a modern web application designed to help business leaders streamline their Excel questionnaire workflow. The application leverages IBM WatsonX.ai to automatically generate professional answers for Excel-based questionnaires, reducing manual effort and improving consistency.
+CRAFT (Compliance Risk Assessment Framework Tool) is a modern web application designed to help business leaders streamline their Excel questionnaire workflow. The application leverages IBM WatsonX.ai to automatically generate professional answers for Excel-based questionnaires, reducing manual effort and improving consistency.
 
 ## Features
 
@@ -31,22 +41,30 @@ Excel AI Processor is a modern web application designed to help business leaders
 
 ## Technology Stack
 
-### Frontend
+### Frontend (OpenShift/DINERO)
 - **React 18** with TypeScript
 - **IBM Carbon Design System** for UI components
 - **Vite** for fast development and building
 - **React Router** for navigation
 - **TanStack Query** for data fetching
 
-### Backend
+### Backend (OpenShift/DINERO)
 - **Node.js** with Express.js
-- **IBM WatsonX.ai** for AI processing
 - **Instana** for monitoring and observability
 - **Multer** for file uploads
 - **xlsx** for Excel file processing
+- **Proxies requests to Python microservice**
+
+### Python Microservice (IBM Code Engine)
+- **Python 3.11** with Flask
+- **IBM WatsonX.ai** for AI processing
+- **Pandas & OpenPyXL** for Excel processing
+- **Sentence Transformers** for embeddings
+- **AstraDB** for RAG (optional)
 
 ### Infrastructure
-- **OpenShift/Kubernetes** for container orchestration
+- **OpenShift/DINERO** for frontend/backend
+- **IBM Code Engine** for Python microservice
 - **OAuth2 Proxy** for authentication
 - **IBM Cloud** for hosting
 
@@ -60,7 +78,7 @@ Excel AI Processor is a modern web application designed to help business leaders
 - **IBM Cloud account** with WatsonX.ai access
 - **Instana account** (optional, for monitoring)
 
-### Quick Setup
+### Quick Setup for Local Development
 
 The fastest way to get started:
 
@@ -69,33 +87,77 @@ The fastest way to get started:
 git clone <repository-url>
 cd excel-ai-processor
 
-# 2. Run automated setup
-./setup.sh
+# 2. Install dependencies
+npm install
 
 # 3. Configure credentials
-# Edit .env and api/python-service/.env with your API keys
+cp .env.example .env
+# Edit .env with your API keys and Python microservice URL
 
-# 4. Start all services
+# 4. Start frontend and backend
 npm run dev:all
 ```
+
+**Note:** The Python microservice is deployed separately on IBM Code Engine. The webapp connects to it via the `PYTHON_SERVICE_URL` environment variable.
+
+### Production Deployment
+
+The application uses a **microservices architecture**:
+
+1. **Python Microservice** (IBM Code Engine) - Already deployed:
+   - URL: `https://craft-python-service.24t5y2wfmvmo.us-east.codeengine.appdomain.cloud`
+   - See `CRAFT-python-microservice/README.md` for deployment details
+
+2. **Frontend/Backend** (OpenShift/DINERO):
+   ```bash
+   # Build container
+   docker build -t excel-ai-processor:latest .
+   
+   # Deploy to OpenShift
+   oc apply -f k8s/
+   ```
+
+See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) and [MICROSERVICE_MIGRATION.md](./MICROSERVICE_MIGRATION.md) for complete deployment details.
 
 ### Detailed Setup
 
 For step-by-step instructions, see **[SETUP.md](./SETUP.md)**.
 
-### Development
+### Local Development
 
-**⚠️ IMPORTANT**: Always use `npm run dev:all` to start all three services!
-
+**Option 1: Use deployed Python microservice (Recommended)**
 ```bash
-# ✅ CORRECT - Start frontend, backend, and Python service
+# Start frontend and backend only
 npm run dev:all
 ```
 
 This starts:
 - ✅ Frontend (Vite): http://localhost:5173
 - ✅ Backend API (Express): http://localhost:3000
-- ✅ Python Service (Flask): http://localhost:5000
+- ✅ Python Service: Uses deployed Code Engine URL
+
+**Option 2: Run Python microservice locally**
+```bash
+# Terminal 1: Python microservice
+cd ../../CRAFT-python-microservice
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python flask_api.py
+
+# Terminal 2: Frontend and backend
+cd CRAFT_web_app/excel-ai-processor
+# Update .env: PYTHON_SERVICE_URL=http://localhost:8080
+npm run dev:all
+
+# Terminal 2: Backend
+cd CRAFT_web_app/excel-ai-processor
+npm run server
+
+# Terminal 3: Frontend
+cd CRAFT_web_app/excel-ai-processor
+npm run dev
+```
 
 **Common Error**: Running `npm run dev` alone will cause `ECONNREFUSED` errors because the backend and Python service won't be running.
 

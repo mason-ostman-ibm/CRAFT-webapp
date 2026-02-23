@@ -1,5 +1,6 @@
 # ============================================================================
 # Multi-stage Production Build for Excel AI Processor
+# Node.js Frontend + Backend Only (Python microservice deployed separately)
 # ============================================================================
 
 # Stage 1: Build Frontend
@@ -24,6 +25,7 @@ WORKDIR /build
 COPY package*.json ./
 RUN npm ci --only=production
 
+<<<<<<< Updated upstream
 # Stage 3: Python Dependencies
 FROM python:3.11-alpine AS python-builder
 
@@ -37,15 +39,21 @@ COPY api/python-service/requirements.txt ./
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # Stage 4: Final Production Image
+=======
+# Stage 3: Final Production Image
+>>>>>>> Stashed changes
 FROM node:20-alpine
 
 WORKDIR /app
 
+<<<<<<< Updated upstream
 # Install Python runtime (no build tools needed)
 RUN apk add --no-cache python3 py3-pip
 
-# Copy frontend build from builder to /app/web/dist (Golden Path structure)
-COPY --from=frontend-builder /build/dist ./web/dist
+=======
+>>>>>>> Stashed changes
+# Copy frontend build from builder
+COPY --from=frontend-builder /build/dist ./dist
 
 # Copy backend files
 COPY api ./api
@@ -53,12 +61,9 @@ COPY api ./api
 # Copy backend node_modules from builder
 COPY --from=backend-builder /build/node_modules ./node_modules
 
-# Copy Python dependencies from builder
-COPY --from=python-builder /install /usr/local
-
-# Create necessary directories with proper permissions
-RUN mkdir -p /tmp/uploads && \
-    chmod 777 /tmp/uploads
+# Create necessary directories
+RUN mkdir -p uploads && \
+    chmod 755 uploads
 
 # Add non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
@@ -71,10 +76,10 @@ USER nodejs
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
 
-# Expose ports
-EXPOSE 3000 5000
+# Expose port
+EXPOSE 3000
 
-# Start Node.js server (which will start Python service via server.js)
+# Start Node.js backend (serves frontend + API)
 CMD ["node", "api/server.js"]
 
 # Made with Bob

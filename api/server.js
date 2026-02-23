@@ -9,18 +9,16 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import xlsx from 'xlsx';
 import fs from 'fs/promises';
-import { createReadStream, existsSync } from 'fs';
-import { spawn, execSync } from 'child_process';
+import { createReadStream } from 'fs';
 import { instanaTrackingMiddleware, trackEvent, trackError } from './instana-middleware.js';
-
-// Python service URL for Delta Tool
-const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:5000';
-const PYTHON_SERVICE_PORT = process.env.PYTHON_SERVICE_PORT || '5000';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 dotenv.config();
+
+// Python service URL for Delta Tool
+const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -41,25 +39,16 @@ app.use(express.json({ limit: '10mb' }));
 app.use(instanaTrackingMiddleware);
 
 // Serve static files from the React app build
-// In Golden Path deployment, frontend is at /app/web/dist
-const frontendPath = process.env.NODE_ENV === 'production'
-  ? '/app/web/dist'
-  : path.join(__dirname, '../dist');
-app.use(express.static(frontendPath));
+app.use(express.static(path.join(__dirname, '../dist')));
 
 // Configure multer for file uploads
-// Use /tmp in production (containerized) or local uploads in development
-const uploadDir = process.env.NODE_ENV === 'production'
-  ? '/tmp/uploads'
-  : path.join(__dirname, '../uploads');
-
 const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
+    const uploadDir = path.join(__dirname, '../uploads');
     try {
       await fs.mkdir(uploadDir, { recursive: true });
       cb(null, uploadDir);
     } catch (error) {
-      console.error('Error creating upload directory:', error);
       cb(error);
     }
   },
@@ -523,7 +512,7 @@ app.post('/api/delta/upload-baseline', upload.single('file'), async (req, res) =
     const options = {
       method: 'POST',
       host: new URL(PYTHON_SERVICE_URL).hostname,
-      port: new URL(PYTHON_SERVICE_URL).port || 5000,
+      port: new URL(PYTHON_SERVICE_URL).port || (new URL(PYTHON_SERVICE_URL).protocol === 'https:' ? 443 : 80),
       path: '/delta/upload-baseline',
       headers: {
         ...formData.getHeaders(),
@@ -531,8 +520,8 @@ app.post('/api/delta/upload-baseline', upload.single('file'), async (req, res) =
       }
     };
 
-    const http = await import('http');
-    
+    const http = await getHttpModule();
+
     const proxyRequest = new Promise((resolve, reject) => {
       const request = http.request(options, (response) => {
         let data = '';
@@ -633,13 +622,13 @@ app.post('/api/delta/process', upload.single('file'), async (req, res) => {
     const options = {
       method: 'POST',
       host: new URL(PYTHON_SERVICE_URL).hostname,
-      port: new URL(PYTHON_SERVICE_URL).port || 5000,
+      port: new URL(PYTHON_SERVICE_URL).port || (new URL(PYTHON_SERVICE_URL).protocol === 'https:' ? 443 : 80),
       path: '/delta/process',
       headers: formData.getHeaders()
     };
 
-    const http = await import('http');
-    
+    const http = await getHttpModule();
+
     const proxyRequest = new Promise((resolve, reject) => {
       const request = http.request(options, (response) => {
         let data = '';
@@ -665,23 +654,11 @@ app.post('/api/delta/process', upload.single('file'), async (req, res) => {
       formData.pipe(request);
     });
 
+    // Python now returns {job_id, status: "queued"} immediately
     const { status, data: result } = await proxyRequest;
 
     if (status === 200) {
-      trackEvent('delta_processing_completed', {
-        total_questions: result.processing_summary.total_questions,
-        auto_answered: result.processing_summary.auto_answered,
-        completion_rate: result.processing_summary.completion_rate
-      });
-
-      res.json({
-        success: true,
-        processing_summary: result.processing_summary,
-        matches: result.matches,
-        unmatched: result.unmatched,
-        download_url: `/api/delta/download/${result.download_filename}`,
-        download_filename: result.download_filename
-      });
+      res.json(result);
     } else {
       throw new Error(result.error || 'Python service error');
     }
@@ -718,13 +695,13 @@ app.get('/api/delta/download/:filename', async (req, res) => {
 
     trackEvent('delta_file_downloaded', { filename });
 
-    // Use http module to properly stream binary file from Python service
-    const http = await import('http');
+    // Use http/https module to properly stream binary file from Python service
+    const http = await getHttpModule();
     const url = new URL(PYTHON_SERVICE_URL);
-    
+
     const options = {
       hostname: url.hostname,
-      port: url.port || 5000,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: `/delta/download/${encodeURIComponent(filename)}`,
       method: 'GET'
     };
@@ -901,17 +878,18 @@ app.post('/api/python/process', upload.single('file'), async (req, res) => {
     });
     formData.append('context', context);
 
-    const http = await import('http');
+    const http = await getHttpModule();
     const url = new URL(PYTHON_SERVICE_URL);
 
     const options = {
       method: 'POST',
       hostname: url.hostname,
-      port: url.port || 5000,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: '/process',
       headers: formData.getHeaders()
     };
 
+    // Python now returns {job_id, status: "queued"} immediately
     await new Promise((resolve) => {
       const proxyReq = http.request(options, (proxyRes) => {
         let data = '';
@@ -919,9 +897,6 @@ app.post('/api/python/process', upload.single('file'), async (req, res) => {
         proxyRes.on('end', () => {
           try {
             const result = JSON.parse(data);
-            if (result.success && result.download_filename) {
-              result.download_url = `/api/python/download/${encodeURIComponent(result.download_filename)}`;
-            }
             res.status(proxyRes.statusCode).json(result);
           } catch {
             res.status(proxyRes.statusCode).json({ error: data });
@@ -957,12 +932,12 @@ app.get('/api/python/download/:filename', async (req, res) => {
   try {
     const { filename } = req.params;
 
-    const http = await import('http');
+    const http = await getHttpModule();
     const url = new URL(PYTHON_SERVICE_URL);
 
     const options = {
       hostname: url.hostname,
-      port: url.port || 5000,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: `/python/download/${encodeURIComponent(filename)}`,
       method: 'GET'
     };
@@ -1000,152 +975,169 @@ app.get('/api/python/download/:filename', async (req, res) => {
 });
 
 /* ========================================================================
+ * ASYNC JOB STATUS & DOWNLOAD PROXIES
+ * /api/python/job/:jobId/... and /api/delta/job/:jobId/...
+ * Both route to the same Python /job/:jobId/... endpoints.
+ * ===================================================================== */
+
+/**
+ * Helper: determine http vs https module from PYTHON_SERVICE_URL
+ */
+async function getHttpModule() {
+  const isHttps = new URL(PYTHON_SERVICE_URL).protocol === 'https:';
+  return isHttps ? await import('https') : await import('http');
+}
+
+/**
+ * GET /api/python/job/:jobId/status  — poll job status (python process jobs)
+ */
+app.get('/api/python/job/:jobId/status', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const response = await fetch(`${PYTHON_SERVICE_URL}/job/${jobId}/status`);
+    const result = await response.json();
+    res.status(response.status).json(result);
+  } catch (error) {
+    console.error('Error polling python job status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/python/job/:jobId/download  — stream completed file (python process jobs)
+ */
+app.get('/api/python/job/:jobId/download', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const httpModule = await getHttpModule();
+    const url = new URL(PYTHON_SERVICE_URL);
+
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: `/job/${encodeURIComponent(jobId)}/download`,
+      method: 'GET'
+    };
+
+    const proxyReq = httpModule.request(options, (proxyRes) => {
+      if (proxyRes.statusCode === 200) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        const disposition = proxyRes.headers['content-disposition'] || `attachment; filename="result.xlsx"`;
+        res.setHeader('Content-Disposition', disposition);
+        proxyRes.pipe(res);
+      } else {
+        let errorData = '';
+        proxyRes.on('data', (chunk) => { errorData += chunk; });
+        proxyRes.on('end', () => {
+          try {
+            res.status(proxyRes.statusCode).json(JSON.parse(errorData));
+          } catch {
+            res.status(proxyRes.statusCode).json({ error: 'File not found' });
+          }
+        });
+      }
+    });
+
+    proxyReq.on('error', (error) => {
+      trackError(error, { operation: 'python_job_download' });
+      res.status(500).json({ error: error.message });
+    });
+
+    proxyReq.end();
+  } catch (error) {
+    console.error('Error downloading python job file:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/delta/job/:jobId/status  — poll job status (delta process jobs)
+ */
+app.get('/api/delta/job/:jobId/status', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const response = await fetch(`${PYTHON_SERVICE_URL}/job/${jobId}/status`);
+    const result = await response.json();
+    res.status(response.status).json(result);
+  } catch (error) {
+    console.error('Error polling delta job status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/delta/job/:jobId/download  — stream completed file (delta process jobs)
+ */
+app.get('/api/delta/job/:jobId/download', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const httpModule = await getHttpModule();
+    const url = new URL(PYTHON_SERVICE_URL);
+
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: `/job/${encodeURIComponent(jobId)}/download`,
+      method: 'GET'
+    };
+
+    const proxyReq = httpModule.request(options, (proxyRes) => {
+      if (proxyRes.statusCode === 200) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        const disposition = proxyRes.headers['content-disposition'] || `attachment; filename="delta_result.xlsx"`;
+        res.setHeader('Content-Disposition', disposition);
+        proxyRes.pipe(res);
+      } else {
+        let errorData = '';
+        proxyRes.on('data', (chunk) => { errorData += chunk; });
+        proxyRes.on('end', () => {
+          try {
+            res.status(proxyRes.statusCode).json(JSON.parse(errorData));
+          } catch {
+            res.status(proxyRes.statusCode).json({ error: 'File not found' });
+          }
+        });
+      }
+    });
+
+    proxyReq.on('error', (error) => {
+      trackError(error, { operation: 'delta_job_download' });
+      res.status(500).json({ error: error.message });
+    });
+
+    proxyReq.end();
+  } catch (error) {
+    console.error('Error downloading delta job file:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/* ========================================================================
  * SPA FALLBACK - Must be BEFORE error handling!
  * ===================================================================== */
 
-// OLD CATCH-ALL ROUTE REMOVED - Using the new one at the end of the file
-
-/* ========================================================================
- * PYTHON SERVICE MANAGEMENT
- * ===================================================================== */
-
-let pythonProcess = null;
-
-/**
- * Start Python Flask service as a child process
- */
-function startPythonService() {
-  const pythonServicePath = path.join(__dirname, 'python-service', 'flask_api.py');
-  const pythonServiceDir = path.join(__dirname, 'python-service');
-  const requirementsPath = path.join(pythonServiceDir, 'requirements.txt');
-  
-  console.log('🐍 Starting Python service...');
-  console.log(`   Path: ${pythonServicePath}`);
-  console.log(`   Port: ${PYTHON_SERVICE_PORT}`);
-  
-  // Check if Python service file exists
-  if (!existsSync(pythonServicePath)) {
-    console.warn('⚠️  Python service not found. Skipping Python service startup.');
-    console.warn('   Some features (Delta Tool, RAG processing) will not be available.');
-    return null;
+// Serve React app for all other routes (SPA fallback)
+app.get('*', (req, res) => {
+  try {
+    const indexPath = path.join(__dirname, '../dist/index.html');
+    res.sendFile(indexPath);
+  } catch (error) {
+    // In development, dist folder might not exist yet
+    res.status(200).send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Excel AI Processor</title>
+        </head>
+        <body>
+          <h1>Excel AI Processor API Server</h1>
+          <p>Backend is running on port ${PORT}</p>
+          <p>Run <code>npm run dev</code> in another terminal to start the frontend.</p>
+          <p>Or run <code>npm run dev:all</code> to start both services.</p>
+        </body>
+      </html>
+    `);
   }
-  
-  // Install Python dependencies if requirements.txt exists
-  if (existsSync(requirementsPath)) {
-    console.log('📦 Installing Python dependencies...');
-    try {
-      execSync(`pip3 install --no-cache-dir -r "${requirementsPath}"`, {
-        cwd: pythonServiceDir,
-        stdio: 'inherit'
-      });
-      console.log('✅ Python dependencies installed');
-    } catch (error) {
-      console.error('❌ Failed to install Python dependencies:', error.message);
-      console.warn('   Python service may not work correctly.');
-    }
-  }
-  
-  pythonProcess = spawn('python3', [pythonServicePath], {
-    cwd: pythonServiceDir,
-    env: {
-      ...process.env,
-      PYTHON_SERVICE_PORT: PYTHON_SERVICE_PORT,
-      PYTHONUNBUFFERED: '1' // Ensure real-time output
-    },
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  
-  pythonProcess.stdout.on('data', (data) => {
-    const output = data.toString().trim();
-    if (output) {
-      console.log(`[Python] ${output}`);
-    }
-  });
-  
-  pythonProcess.stderr.on('data', (data) => {
-    const output = data.toString().trim();
-    if (output && !output.includes('WARNING')) {
-      console.error(`[Python Error] ${output}`);
-    }
-  });
-  
-  pythonProcess.on('error', (error) => {
-    console.error('❌ Failed to start Python service:', error.message);
-    console.error('   Some features (Delta Tool, RAG processing) will not be available.');
-  });
-  
-  pythonProcess.on('exit', (code, signal) => {
-    if (code !== null && code !== 0) {
-      console.error(`❌ Python service exited with code ${code}`);
-    } else if (signal) {
-      console.log(`🐍 Python service terminated by signal ${signal}`);
-    }
-    pythonProcess = null;
-  });
-  
-  // Give Python service time to start
-  setTimeout(() => {
-    if (pythonProcess && !pythonProcess.killed) {
-      console.log('✅ Python service started successfully');
-    }
-  }, 2000);
-  
-  return pythonProcess;
-}
-
-/**
- * Graceful shutdown handler
- */
-function gracefulShutdown(signal) {
-  console.log(`\n${signal} received. Shutting down gracefully...`);
-  
-  if (pythonProcess && !pythonProcess.killed) {
-    console.log('🐍 Stopping Python service...');
-    pythonProcess.kill('SIGTERM');
-    
-    // Force kill after 5 seconds if not stopped
-    setTimeout(() => {
-      if (pythonProcess && !pythonProcess.killed) {
-        console.log('🐍 Force stopping Python service...');
-        pythonProcess.kill('SIGKILL');
-      }
-    }, 5000);
-  }
-  
-  // Exit after cleanup
-  setTimeout(() => {
-    process.exit(0);
-  }, 6000);
-}
-
-// Register shutdown handlers
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-/* ========================================================================
- * SERVE REACT APP (CATCH-ALL ROUTE)
- * This MUST be the last route defined - it catches all non-API routes
- * ===================================================================== */
-
-// Handle React Router - send all other requests to index.html
-app.get("*", (req, res) => {
-    // Don't fallback for /api paths - they should return JSON 404
-    if (req.path.startsWith('/api/')) {
-        res.status(404).json({ error: 'API endpoint not found', path: req.path });
-    }
-    // Serve React app for all other routes
-    else {
-        // In Golden Path deployment, frontend is at /app/web/dist
-        const indexFile = process.env.NODE_ENV === 'production'
-            ? '/app/web/dist/index.html'
-            : path.join(__dirname, '../dist/index.html');
-        res.sendFile(indexFile, (err) => {
-            if (err) {
-                console.error('Error serving index.html:', err);
-                res.status(500).send('Error loading application');
-            }
-        });
-    }
 });
 
 /* ========================================================================
@@ -1157,10 +1149,6 @@ app.listen(PORT, () => {
   console.log(`📊 Processing Excel files with WatsonX.ai`);
   console.log(`📈 Instana monitoring enabled`);
   console.log(`🌐 Serving frontend from /dist`);
-  console.log(`🌐 Main app: http://localhost:${PORT}/`);
-  
-  // Start Python service after Node.js server is ready
-  startPythonService();
 });
 
 // Made with Bob
