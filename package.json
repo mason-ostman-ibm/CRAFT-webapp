@@ -6,6 +6,7 @@
   "description": "AI-powered Excel processing application for ATLs and MDs using IBM Carbon Design System and WatsonX.ai",
   "scripts": {
     "dev": "vite",
+    "start": "node api/server.js",
     "server": "node api/server.js",
     "dev:all": "concurrently --names \"VITE,API\" --prefix-colors \"cyan,green\" \"npm run dev\" \"npm run server\"",
     "build": "vite build",
