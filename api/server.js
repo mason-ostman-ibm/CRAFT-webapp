@@ -39,9 +39,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use(instanaTrackingMiddleware);
 
 // Serve static files from the React app build
-const frontendPath = process.env.NODE_ENV === 'production'
-  ? '/app/dist'
-  : path.join(__dirname, '../dist');
+// Golden Path sets WEB_ROOT=/app/web/dist, local dev uses ../dist
+const frontendPath = process.env.WEB_ROOT || path.join(__dirname, '../dist');
 app.use(express.static(frontendPath));
 
 // Configure multer for file uploads
@@ -1122,8 +1121,9 @@ app.get('/api/delta/job/:jobId/download', async (req, res) => {
 // Serve React app for all other routes (SPA fallback)
 app.get('*', (req, res) => {
   try {
-    const indexPath = process.env.NODE_ENV === 'production'
-      ? '/app/dist/index.html'
+    // Golden Path sets WEB_ROOT=/app/web/dist, local dev uses ../dist
+    const indexPath = process.env.WEB_ROOT
+      ? path.join(process.env.WEB_ROOT, 'index.html')
       : path.join(__dirname, '../dist/index.html');
     res.sendFile(indexPath);
   } catch (error) {
