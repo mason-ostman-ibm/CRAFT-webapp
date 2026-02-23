@@ -26,7 +26,7 @@ env:
   WATSON_TEXT_MODEL: "mistralai/mistral-small-3-1-24b-instruct-2503"
   
   # Python Service Configuration
-  PYTHON_SERVICE_URL: "http://localhost:5000"
+  PYTHON_SERVICE_URL: "https://craft-python-service.24t5y2wfmvmo.us-east.codeengine.appdomain.cloud"
   PYTHON_SERVICE_PORT: "5000"
   
   # AstraDB Configuration (Optional - for RAG features)

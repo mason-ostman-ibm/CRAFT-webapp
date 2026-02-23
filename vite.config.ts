@@ -20,7 +20,8 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: 'dist',
+    // Golden Path expects build output in /out directory
+    outDir: process.env.BUILD_OUTPUT_DIR || 'dist',
     sourcemap: true,
   },
 });

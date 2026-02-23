@@ -9,7 +9,7 @@
     "start": "node api/server.js",
     "server": "node api/server.js",
     "dev:all": "concurrently --names \"VITE,API\" --prefix-colors \"cyan,green\" \"npm run dev\" \"npm run server\"",
-    "build": "vite build",
+    "build": "BUILD_OUTPUT_DIR=/out vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest",
