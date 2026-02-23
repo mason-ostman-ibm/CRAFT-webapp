@@ -46,7 +46,10 @@ app.use(express.static(frontendPath));
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../uploads');
+    // Use /tmp for uploads in containerized environments (OpenShift runs as non-root)
+    const uploadDir = process.env.NODE_ENV === 'production'
+      ? '/tmp/uploads'
+      : path.join(__dirname, '../uploads');
     try {
       await fs.mkdir(uploadDir, { recursive: true });
       cb(null, uploadDir);
