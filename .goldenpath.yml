@@ -23,7 +23,7 @@ env:
     secretKeyRef:
       name: watsonx-secrets
       key: project-id
-  WATSON_TEXT_MODEL: "meta-llama/llama-3-3-70b-instruct"
+  WATSON_TEXT_MODEL: "mistralai/mistral-small-3-1-24b-instruct-2503"
   
   # Application Configuration
   NODE_ENV: "production"

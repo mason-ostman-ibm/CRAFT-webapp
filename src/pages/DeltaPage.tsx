@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Grid,
@@ -85,8 +85,10 @@ const DeltaPage: React.FC = () => {
   const [useLlmMode, setUseLlmMode] = useState(false);
   const [isUploadingBaseline, setIsUploadingBaseline] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [processingResults, setProcessingResults] = useState<{
     summary: ProcessingSummary;
     matches: Match[];
@@ -98,6 +100,13 @@ const DeltaPage: React.FC = () => {
   useEffect(() => {
     loadDeltaStatus();
     loadBaselineInfo();
+  }, []);
+
+  // Clean up polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
   }, []);
 
   const loadDeltaStatus = async () => {
@@ -199,6 +208,7 @@ const DeltaPage: React.FC = () => {
     setError(null);
     setSuccess(null);
     setProcessingResults(null);
+    setStatusMessage('Submitting job...');
 
     const formData = new FormData();
     formData.append('file', currentFile);
@@ -212,21 +222,54 @@ const DeltaPage: React.FC = () => {
 
       const data = await response.json();
 
-      if (response.ok && data.success) {
-        setProcessingResults({
-          summary: data.processing_summary,
-          matches: data.matches,
-          unmatched: data.unmatched,
-          download_url: data.download_url
-        });
-        setSuccess(`Processing complete! Auto-answered ${data.processing_summary.auto_answered} of ${data.processing_summary.total_questions} questions (${data.processing_summary.completion_rate}).`);
-      } else {
-        setError(data.error || data.message || 'Failed to process delta');
+      if (!response.ok) {
+        setError(data.error || data.message || 'Failed to submit job');
+        setIsProcessing(false);
+        return;
       }
+
+      const jobId: string = data.job_id;
+      setStatusMessage('Job queued. Processing will start shortly...');
+
+      // Poll every 3 seconds until completed or failed
+      pollingRef.current = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`/api/delta/job/${jobId}/status`);
+          const statusData = await statusRes.json();
+
+          if (statusData.message) {
+            setStatusMessage(statusData.message);
+          }
+
+          if (statusData.status === 'completed') {
+            clearInterval(pollingRef.current!);
+            pollingRef.current = null;
+
+            const result = statusData.result;
+            setProcessingResults({
+              summary: result.processing_summary,
+              matches: result.matches,
+              unmatched: result.unmatched,
+              download_url: `/api/delta/job/${jobId}/download`,
+            });
+            setSuccess(
+              `Processing complete! Auto-answered ${result.processing_summary.auto_answered} of ${result.processing_summary.total_questions} questions (${result.processing_summary.completion_rate}).`
+            );
+            setIsProcessing(false);
+          } else if (statusData.status === 'failed') {
+            clearInterval(pollingRef.current!);
+            pollingRef.current = null;
+            setError(statusData.error || statusData.message || 'Processing failed');
+            setIsProcessing(false);
+          }
+        } catch (pollErr) {
+          console.error('Polling error:', pollErr);
+        }
+      }, 3000);
+
     } catch (err) {
       setError('Network error. Please try again.');
       console.error('Process delta error:', err);
-    } finally {
       setIsProcessing(false);
     }
   };
@@ -431,7 +474,7 @@ const DeltaPage: React.FC = () => {
               
               {isProcessing && (
                 <div style={{ marginTop: '1rem' }}>
-                  <Loading description="Processing questionnaire delta..." />
+                  <Loading description={statusMessage || 'Processing questionnaire delta...'} />
                 </div>
               )}
             </div>

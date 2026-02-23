@@ -12,13 +12,13 @@ import fs from 'fs/promises';
 import { createReadStream } from 'fs';
 import { instanaTrackingMiddleware, trackEvent, trackError } from './instana-middleware.js';
 
-// Python service URL for Delta Tool
-const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:5000';
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 dotenv.config();
+
+// Python service URL for Delta Tool
+const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -512,7 +512,7 @@ app.post('/api/delta/upload-baseline', upload.single('file'), async (req, res) =
     const options = {
       method: 'POST',
       host: new URL(PYTHON_SERVICE_URL).hostname,
-      port: new URL(PYTHON_SERVICE_URL).port || 5000,
+      port: new URL(PYTHON_SERVICE_URL).port || (new URL(PYTHON_SERVICE_URL).protocol === 'https:' ? 443 : 80),
       path: '/delta/upload-baseline',
       headers: {
         ...formData.getHeaders(),
@@ -520,8 +520,8 @@ app.post('/api/delta/upload-baseline', upload.single('file'), async (req, res) =
       }
     };
 
-    const http = await import('http');
-    
+    const http = await getHttpModule();
+
     const proxyRequest = new Promise((resolve, reject) => {
       const request = http.request(options, (response) => {
         let data = '';
@@ -622,13 +622,13 @@ app.post('/api/delta/process', upload.single('file'), async (req, res) => {
     const options = {
       method: 'POST',
       host: new URL(PYTHON_SERVICE_URL).hostname,
-      port: new URL(PYTHON_SERVICE_URL).port || 5000,
+      port: new URL(PYTHON_SERVICE_URL).port || (new URL(PYTHON_SERVICE_URL).protocol === 'https:' ? 443 : 80),
       path: '/delta/process',
       headers: formData.getHeaders()
     };
 
-    const http = await import('http');
-    
+    const http = await getHttpModule();
+
     const proxyRequest = new Promise((resolve, reject) => {
       const request = http.request(options, (response) => {
         let data = '';
@@ -654,23 +654,11 @@ app.post('/api/delta/process', upload.single('file'), async (req, res) => {
       formData.pipe(request);
     });
 
+    // Python now returns {job_id, status: "queued"} immediately
     const { status, data: result } = await proxyRequest;
 
     if (status === 200) {
-      trackEvent('delta_processing_completed', {
-        total_questions: result.processing_summary.total_questions,
-        auto_answered: result.processing_summary.auto_answered,
-        completion_rate: result.processing_summary.completion_rate
-      });
-
-      res.json({
-        success: true,
-        processing_summary: result.processing_summary,
-        matches: result.matches,
-        unmatched: result.unmatched,
-        download_url: `/api/delta/download/${result.download_filename}`,
-        download_filename: result.download_filename
-      });
+      res.json(result);
     } else {
       throw new Error(result.error || 'Python service error');
     }
@@ -707,13 +695,13 @@ app.get('/api/delta/download/:filename', async (req, res) => {
 
     trackEvent('delta_file_downloaded', { filename });
 
-    // Use http module to properly stream binary file from Python service
-    const http = await import('http');
+    // Use http/https module to properly stream binary file from Python service
+    const http = await getHttpModule();
     const url = new URL(PYTHON_SERVICE_URL);
-    
+
     const options = {
       hostname: url.hostname,
-      port: url.port || 5000,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: `/delta/download/${encodeURIComponent(filename)}`,
       method: 'GET'
     };
@@ -890,17 +878,18 @@ app.post('/api/python/process', upload.single('file'), async (req, res) => {
     });
     formData.append('context', context);
 
-    const http = await import('http');
+    const http = await getHttpModule();
     const url = new URL(PYTHON_SERVICE_URL);
 
     const options = {
       method: 'POST',
       hostname: url.hostname,
-      port: url.port || 5000,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: '/process',
       headers: formData.getHeaders()
     };
 
+    // Python now returns {job_id, status: "queued"} immediately
     await new Promise((resolve) => {
       const proxyReq = http.request(options, (proxyRes) => {
         let data = '';
@@ -908,9 +897,6 @@ app.post('/api/python/process', upload.single('file'), async (req, res) => {
         proxyRes.on('end', () => {
           try {
             const result = JSON.parse(data);
-            if (result.success && result.download_filename) {
-              result.download_url = `/api/python/download/${encodeURIComponent(result.download_filename)}`;
-            }
             res.status(proxyRes.statusCode).json(result);
           } catch {
             res.status(proxyRes.statusCode).json({ error: data });
@@ -946,12 +932,12 @@ app.get('/api/python/download/:filename', async (req, res) => {
   try {
     const { filename } = req.params;
 
-    const http = await import('http');
+    const http = await getHttpModule();
     const url = new URL(PYTHON_SERVICE_URL);
 
     const options = {
       hostname: url.hostname,
-      port: url.port || 5000,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: `/python/download/${encodeURIComponent(filename)}`,
       method: 'GET'
     };
@@ -984,6 +970,144 @@ app.get('/api/python/download/:filename', async (req, res) => {
   } catch (error) {
     console.error('Error downloading python file:', error);
     trackError(error, { operation: 'python_download' });
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/* ========================================================================
+ * ASYNC JOB STATUS & DOWNLOAD PROXIES
+ * /api/python/job/:jobId/... and /api/delta/job/:jobId/...
+ * Both route to the same Python /job/:jobId/... endpoints.
+ * ===================================================================== */
+
+/**
+ * Helper: determine http vs https module from PYTHON_SERVICE_URL
+ */
+async function getHttpModule() {
+  const isHttps = new URL(PYTHON_SERVICE_URL).protocol === 'https:';
+  return isHttps ? await import('https') : await import('http');
+}
+
+/**
+ * GET /api/python/job/:jobId/status  — poll job status (python process jobs)
+ */
+app.get('/api/python/job/:jobId/status', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const response = await fetch(`${PYTHON_SERVICE_URL}/job/${jobId}/status`);
+    const result = await response.json();
+    res.status(response.status).json(result);
+  } catch (error) {
+    console.error('Error polling python job status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/python/job/:jobId/download  — stream completed file (python process jobs)
+ */
+app.get('/api/python/job/:jobId/download', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const httpModule = await getHttpModule();
+    const url = new URL(PYTHON_SERVICE_URL);
+
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: `/job/${encodeURIComponent(jobId)}/download`,
+      method: 'GET'
+    };
+
+    const proxyReq = httpModule.request(options, (proxyRes) => {
+      if (proxyRes.statusCode === 200) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        const disposition = proxyRes.headers['content-disposition'] || `attachment; filename="result.xlsx"`;
+        res.setHeader('Content-Disposition', disposition);
+        proxyRes.pipe(res);
+      } else {
+        let errorData = '';
+        proxyRes.on('data', (chunk) => { errorData += chunk; });
+        proxyRes.on('end', () => {
+          try {
+            res.status(proxyRes.statusCode).json(JSON.parse(errorData));
+          } catch {
+            res.status(proxyRes.statusCode).json({ error: 'File not found' });
+          }
+        });
+      }
+    });
+
+    proxyReq.on('error', (error) => {
+      trackError(error, { operation: 'python_job_download' });
+      res.status(500).json({ error: error.message });
+    });
+
+    proxyReq.end();
+  } catch (error) {
+    console.error('Error downloading python job file:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/delta/job/:jobId/status  — poll job status (delta process jobs)
+ */
+app.get('/api/delta/job/:jobId/status', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const response = await fetch(`${PYTHON_SERVICE_URL}/job/${jobId}/status`);
+    const result = await response.json();
+    res.status(response.status).json(result);
+  } catch (error) {
+    console.error('Error polling delta job status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/delta/job/:jobId/download  — stream completed file (delta process jobs)
+ */
+app.get('/api/delta/job/:jobId/download', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const httpModule = await getHttpModule();
+    const url = new URL(PYTHON_SERVICE_URL);
+
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: `/job/${encodeURIComponent(jobId)}/download`,
+      method: 'GET'
+    };
+
+    const proxyReq = httpModule.request(options, (proxyRes) => {
+      if (proxyRes.statusCode === 200) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        const disposition = proxyRes.headers['content-disposition'] || `attachment; filename="delta_result.xlsx"`;
+        res.setHeader('Content-Disposition', disposition);
+        proxyRes.pipe(res);
+      } else {
+        let errorData = '';
+        proxyRes.on('data', (chunk) => { errorData += chunk; });
+        proxyRes.on('end', () => {
+          try {
+            res.status(proxyRes.statusCode).json(JSON.parse(errorData));
+          } catch {
+            res.status(proxyRes.statusCode).json({ error: 'File not found' });
+          }
+        });
+      }
+    });
+
+    proxyReq.on('error', (error) => {
+      trackError(error, { operation: 'delta_job_download' });
+      res.status(500).json({ error: error.message });
+    });
+
+    proxyReq.end();
+  } catch (error) {
+    console.error('Error downloading delta job file:', error);
     res.status(500).json({ error: error.message });
   }
 });

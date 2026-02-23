@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Grid,
@@ -61,10 +61,19 @@ const ProcessPage: React.FC = () => {
   const [context, setContext] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [processResult, setProcessResult] = useState<ProcessResult | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Clean up polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, []);
 
   const handleFileChange = (event: any) => {
     const files = event.target?.files || event.addedFiles;
@@ -119,6 +128,7 @@ const ProcessPage: React.FC = () => {
     setError(null);
     setSuccess(null);
     setProcessResult(null);
+    setStatusMessage('Submitting job...');
 
     try {
       const formData = new FormData();
@@ -130,25 +140,53 @@ const ProcessPage: React.FC = () => {
         body: formData,
       });
 
-      const data: ProcessResult = await response.json();
+      const data = await response.json();
 
-      if (response.ok && data.success) {
-        setProcessResult(data);
-        setDownloadUrl(data.download_url);
-        setSuccess(
-          `Processing complete! Answered ${data.questions_answered} questions across ${data.sheets_processed} sheet(s).`
-        );
-      } else {
-        const errData = data as any;
-        setError(errData.error || 'Failed to process with AI');
-        if (errData.details) {
-          console.error('Processing details:', errData.details);
-        }
+      if (!response.ok) {
+        setError(data.error || 'Failed to submit job');
+        setIsProcessing(false);
+        return;
       }
+
+      const jobId: string = data.job_id;
+      setStatusMessage('Job queued. Processing will start shortly...');
+
+      // Poll every 3 seconds until completed or failed
+      pollingRef.current = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`/api/python/job/${jobId}/status`);
+          const statusData = await statusRes.json();
+
+          if (statusData.message) {
+            setStatusMessage(statusData.message);
+          }
+
+          if (statusData.status === 'completed') {
+            clearInterval(pollingRef.current!);
+            pollingRef.current = null;
+
+            const result: ProcessResult = statusData.result;
+            result.download_url = `/api/python/job/${jobId}/download`;
+            setProcessResult(result);
+            setDownloadUrl(result.download_url);
+            setSuccess(
+              `Processing complete! Answered ${result.questions_answered} questions across ${result.sheets_processed} sheet(s).`
+            );
+            setIsProcessing(false);
+          } else if (statusData.status === 'failed') {
+            clearInterval(pollingRef.current!);
+            pollingRef.current = null;
+            setError(statusData.error || statusData.message || 'Processing failed');
+            setIsProcessing(false);
+          }
+        } catch (pollErr) {
+          console.error('Polling error:', pollErr);
+        }
+      }, 3000);
+
     } catch (err) {
       setError('Network error. Please try again.');
       console.error('Process error:', err);
-    } finally {
       setIsProcessing(false);
     }
   };
@@ -240,7 +278,7 @@ const ProcessPage: React.FC = () => {
                 </Button>
                 {isProcessing && (
                   <div style={{ marginTop: '1rem' }}>
-                    <Loading description="Processing with AI — this may take a few minutes..." />
+                    <Loading description={statusMessage || 'Processing with AI — this may take a few minutes...'} />
                   </div>
                 )}
               </div>

@@ -36,28 +36,10 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3000
-      - PYTHON_SERVICE_URL=http://python-service:5000
+      # Python microservice URL - points to deployed Code Engine service
+      - PYTHON_SERVICE_URL=https://craft-python-service.24t5y2wfmvmo.us-east.codeengine.appdomain.cloud
     env_file:
       - .env
-    depends_on:
-      - python-service
-    networks:
-      - app-network
-
-  # Python Service (Flask)
-  python-service:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-      target: python-service
-    ports:
-      - "5000:5000"
-    volumes:
-      - ./api/python-service:/app/api/python-service
-    environment:
-      - PYTHON_SERVICE_PORT=5000
-    env_file:
-      - ./api/python-service/.env
     networks:
       - app-network
 
@@ -67,4 +49,3 @@ networks:
 
 volumes:
   node_modules:
-  python_venv:
