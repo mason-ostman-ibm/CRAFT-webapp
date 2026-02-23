@@ -39,7 +39,10 @@ app.use(express.json({ limit: '10mb' }));
 app.use(instanaTrackingMiddleware);
 
 // Serve static files from the React app build
-app.use(express.static(path.join(__dirname, '../dist')));
+const frontendPath = process.env.NODE_ENV === 'production'
+  ? '/app/dist'
+  : path.join(__dirname, '../dist');
+app.use(express.static(frontendPath));
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -1119,7 +1122,9 @@ app.get('/api/delta/job/:jobId/download', async (req, res) => {
 // Serve React app for all other routes (SPA fallback)
 app.get('*', (req, res) => {
   try {
-    const indexPath = path.join(__dirname, '../dist/index.html');
+    const indexPath = process.env.NODE_ENV === 'production'
+      ? '/app/dist/index.html'
+      : path.join(__dirname, '../dist/index.html');
     res.sendFile(indexPath);
   } catch (error) {
     // In development, dist folder might not exist yet
