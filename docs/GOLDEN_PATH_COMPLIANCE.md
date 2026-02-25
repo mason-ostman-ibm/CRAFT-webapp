@@ -76,7 +76,7 @@ COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
-# ... backend build + Python for RAG
+# ... backend build
 FROM node:20-alpine
 COPY --from=builder /build/dist ./dist
 COPY --from=builder /build/api ./api
@@ -84,8 +84,8 @@ CMD ["node", "api/server.js"]
 ```
 
 **Enhancements:**
-- ✅ Adds Python support for Mason's RAG system
 - ✅ Maintains same multi-stage pattern
+- ✅ Backend proxies to Python microservice on Code Engine
 - ✅ Same optimization approach
 
 ### ✅ Kubernetes Deployment
@@ -225,14 +225,15 @@ oauth2_args:
 
 While maintaining Golden Path compliance, excel-ai-processor adds:
 
-### 1. Python Service Layer
-- Mason's RAG system integration
+### 1. Python Microservice Integration
+- Deployed separately on IBM Code Engine
+- Backend proxies requests to microservice
 - AstraDB vector database support
 - IBM Granite embeddings
 - **Does not affect deployment** - runs in same container
 
-### 2. Watson Orchestrate
-- Embedded chatbot component
+### 2. Additional Features
+- Additional UI components as needed
 - **No deployment changes** - frontend feature
 
 ### 4. Demo Mode
@@ -278,9 +279,9 @@ The application follows the exact same deployment pattern as your-projects and f
 **It will deploy just as easily as your-projects.** 🚀
 
 The only differences are:
-1. Additional Python dependencies (handled in Dockerfile)
-2. Additional secrets for WatsonX (same pattern as Instana)
-3. Additional features (Watson Orchestrate) that don't affect deployment
+1. Additional secrets for WatsonX (same pattern as Instana)
+2. PYTHON_SERVICE_URL environment variable for microservice connection
+3. Additional features that don't affect deployment
 
 ## Quick Deploy Commands
 

@@ -10,7 +10,6 @@ import DeltaPage from "./pages/DeltaPage";
 import ValidationPage from "./pages/ValidationPage";
 import TeamPage from "./pages/TeamPage";
 import NotFound from "./pages/NotFound";
-import WatsonOrchestrate from "./components/WatsonOrchestrate";
 
 const queryClient = new QueryClient();
 
@@ -18,7 +17,6 @@ const App: React.FC = () => (
   <QueryClientProvider client={queryClient}>
     <Theme theme="g100">
       <BrowserRouter>
-        <WatsonOrchestrate />
         <Routes>
           <Route path="/" element={<MainLayout />}>
             <Route index element={<HomePage />} />

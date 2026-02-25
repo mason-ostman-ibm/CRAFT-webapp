@@ -16,8 +16,8 @@ This file provides guidance to agents when working with code in this repository.
 
 ### Monorepo Structure (Counterintuitive)
 - Root directory = React frontend (not typical monorepo pattern)
-- `api/` directory = Node.js backend
-- `api/python-service/` = Optional Python RAG processor
+- `api/` directory = Node.js backend (proxies to Python microservice)
+- Python microservice = Deployed separately on IBM Code Engine
 - Frontend proxies `/api/*` to backend at port 3000 (configured in vite.config.ts)
 
 ### Development Commands
@@ -34,7 +34,7 @@ This file provides guidance to agents when working with code in this repository.
 - Frontend uses Carbon Design System `g100` theme (dark mode)
 - Theme is hardcoded in `src/App.tsx`, not configurable
 
-### Optional Python Service
-- Python RAG service in `api/python-service/` is optional
-- Backend can run standalone without Python service
-- Enhanced mode uses AstraDB + IBM Granite embeddings for better answers
+### Python Microservice
+- Python microservice deployed on IBM Code Engine (separate from webapp)
+- Backend proxies requests to microservice via PYTHON_SERVICE_URL
+- Provides RAG-powered processing with AstraDB + IBM Granite embeddings

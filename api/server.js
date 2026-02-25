@@ -215,8 +215,9 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     // Convert to JSON
     const data = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
     
-    // Extract questions (assuming first column contains questions)
+    // Extract questions (assuming first column contains questions, skip header row)
     const questions = data
+      .slice(1)
       .filter(row => row[0] && typeof row[0] === 'string')
       .map((row, index) => ({
         question: row[0],

@@ -18,6 +18,8 @@ import {
   TextArea,
   Stack,
   Tag,
+  Tile,
+  ProgressBar,
 } from '@carbon/react';
 import { Download, Renew, CheckmarkFilled } from '@carbon/icons-react';
 
@@ -287,6 +289,63 @@ const ProcessPage: React.FC = () => {
 
           {processResult && (
             <>
+              {/* Processing Summary */}
+              <div style={{ padding: '2rem', backgroundColor: '#262626', borderRadius: '4px' }}>
+                <Heading style={{ marginBottom: '1rem' }}>Processing Summary</Heading>
+
+                <Grid narrow>
+                  <Column lg={4} md={2} sm={2}>
+                    <Tile style={{ backgroundColor: '#393939', textAlign: 'center', padding: '1rem' }}>
+                      <p style={{ fontSize: '2rem', fontWeight: 'bold', color: '#42be65' }}>
+                        {processResult.questions_answered}
+                      </p>
+                      <p style={{ fontSize: '0.875rem', color: '#c6c6c6' }}>Questions Answered</p>
+                    </Tile>
+                  </Column>
+
+                  <Column lg={4} md={2} sm={2}>
+                    <Tile style={{ backgroundColor: '#393939', textAlign: 'center', padding: '1rem' }}>
+                      <p style={{ fontSize: '2rem', fontWeight: 'bold', color: '#ff832b' }}>
+                        {(uploadData?.totalQuestions ?? processResult.questions_answered) - processResult.questions_answered}
+                      </p>
+                      <p style={{ fontSize: '0.875rem', color: '#c6c6c6' }}>Left Blank</p>
+                    </Tile>
+                  </Column>
+
+                  <Column lg={4} md={2} sm={2}>
+                    <Tile style={{ backgroundColor: '#393939', textAlign: 'center', padding: '1rem' }}>
+                      <p style={{ fontSize: '2rem', fontWeight: 'bold', color: '#78a9ff' }}>
+                        {uploadData?.totalQuestions
+                          ? ((processResult.questions_answered / uploadData.totalQuestions) * 100).toFixed(0) + '%'
+                          : '100%'}
+                      </p>
+                      <p style={{ fontSize: '0.875rem', color: '#c6c6c6' }}>Completion Rate</p>
+                    </Tile>
+                  </Column>
+
+                  <Column lg={4} md={2} sm={2}>
+                    <Tile style={{ backgroundColor: '#393939', textAlign: 'center', padding: '1rem' }}>
+                      <p style={{ fontSize: '2rem', fontWeight: 'bold' }}>
+                        {uploadData?.totalQuestions ?? processResult.questions_answered}
+                      </p>
+                      <p style={{ fontSize: '0.875rem', color: '#c6c6c6' }}>Total Questions</p>
+                    </Tile>
+                  </Column>
+                </Grid>
+
+                <div style={{ marginTop: '1.5rem' }}>
+                  <ProgressBar
+                    label="Completion Progress"
+                    value={
+                      uploadData?.totalQuestions
+                        ? (processResult.questions_answered / uploadData.totalQuestions) * 100
+                        : 100
+                    }
+                    max={100}
+                  />
+                </div>
+              </div>
+
               {/* Q&A Preview */}
               {processResult.qa_pairs && processResult.qa_pairs.length > 0 && (
                 <div style={{ padding: '2rem', backgroundColor: '#262626', borderRadius: '4px' }}>

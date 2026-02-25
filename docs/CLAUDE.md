@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Excel AI Processor is a fullstack web application for automating Excel questionnaire completion using IBM WatsonX.ai with RAG (Retrieval-Augmented Generation). Built with React/TypeScript frontend, Node.js/Express backend, and a **Python RAG service as the primary processing engine**.
+Excel AI Processor is a fullstack web application for automating Excel questionnaire completion using IBM WatsonX.ai with RAG (Retrieval-Augmented Generation). Built with React/TypeScript frontend and Node.js/Express backend that connects to a **Python microservice deployed on IBM Code Engine** as the primary processing engine.
 
 **Key Technologies:**
 - Frontend: React 18 + TypeScript + Vite + IBM Carbon Design System
-- Backend: Node.js + Express.js (legacy endpoints, OAuth)
-- **Primary AI Engine:** Python Flask + RAG with AstraDB + IBM Granite embeddings
+- Backend: Node.js + Express.js (API proxy, OAuth)
+- **Primary AI Engine:** Python Flask microservice (deployed on IBM Code Engine) + RAG with AstraDB + IBM Granite embeddings
 - AI Models: IBM WatsonX.ai (Mistral, Llama models)
 - Vector DB: AstraDB with semantic search
 - Monitoring: Instana SaaS
@@ -33,31 +33,24 @@ npm install
 
 # Copy environment variables
 cp .env.example .env
-cp .env.example api/python-service/.env
-
-# Setup Python virtual environment (if not already done)
-cd api/python-service
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-cd ../..
+# Configure PYTHON_SERVICE_URL to point to the deployed Code Engine service
 ```
 
-**Note:** The Python service uses a virtual environment located at `api/python-service/venv/`. The `npm run python-service` command automatically activates this venv before starting Flask.
+**Note:** The Python microservice is deployed separately on IBM Code Engine. You don't need to run it locally unless you're developing the Python service itself (see CRAFT-python-microservice repo).
 
 ### Running the Application
 
 **⚠️ CRITICAL: Always start all three services together:**
 
 ```bash
-# ✅ CORRECT - Start all services (Frontend + Backend + Python RAG)
+# ✅ CORRECT - Start frontend and backend (connects to deployed Python microservice)
 npm run dev:all
 ```
 
 This starts:
 - Frontend dev server: http://localhost:5173
 - Backend API server: http://localhost:3000
-- Python RAG service: http://localhost:5000
+- Python microservice: Deployed on IBM Code Engine (configured via PYTHON_SERVICE_URL)
 
 **Running separately** (for debugging):
 ```bash
@@ -67,13 +60,11 @@ npm run server
 # Terminal 2 - Frontend
 npm run dev
 
-# Terminal 3 - Python RAG Service
-npm run python-service
 ```
 
 **Common Errors:**
 - Running `npm run dev` alone causes `ECONNREFUSED` errors because the backend won't be running
-- Processing files without Python service running causes "Network error" - the frontend requires the Python RAG service for document processing
+- Processing files without proper PYTHON_SERVICE_URL causes "Network error" - the backend proxies requests to the Python microservice on Code Engine
 
 ### Building
 ```bash
@@ -106,16 +97,17 @@ npm run lint
 
 This is a monorepo-style fullstack application where:
 - **Root directory** contains the React frontend
-- **`api/` directory** contains the Node.js backend
-- **`api/python-service/`** contains the optional Python RAG processor
+- **`api/` directory** contains the Node.js backend (proxies to Python microservice)
+- **Python microservice** is deployed separately on IBM Code Engine (see CRAFT-python-microservice repo)
 
 ### Multi-Service Design
 
-The application uses **Python RAG Service as the primary processing engine**:
+The application uses a **Python microservice on IBM Code Engine** as the primary processing engine:
 
-**Current Architecture (Python RAG):**
-- Frontend uploads Excel directly to Python Flask service (port 5000)
-- Python service provides RAG-powered document completion
+**Current Architecture:**
+- Frontend sends requests to Node.js backend (port 3000)
+- Backend proxies requests to Python microservice on Code Engine
+- Python microservice provides RAG-powered document completion
 - Each question is processed individually with context from AstraDB
 - Uses IBM Granite embeddings for semantic search
 - Smart column detection using LLM
@@ -158,19 +150,16 @@ The backend gracefully degrades if WatsonX credentials are not configured, provi
 
 **Key Components:**
 - `MainLayout.tsx` - Carbon Design System layout with header/sidebar
-- `WatsonOrchestrate.tsx` - Embedded chatbot widget
 - Pages use `@tanstack/react-query` for data fetching
 - Theme: Carbon `g100` (dark theme)
 
-### Python RAG Service (`api/python-service/`)
+### Python Microservice (IBM Code Engine)
 
 **Primary processing engine for Excel questionnaires with RAG enhancement.**
 
-**Files:**
-- `flask_api.py` - Flask REST API (port 5000)
-- `document_processor.py` - RAG processing logic with smart column detection
-- `requirements.txt` - Python dependencies
-- `.env` - Service-specific environment variables (separate from root .env)
+**Deployment:** Separate microservice deployed on IBM Code Engine
+**Repository:** CRAFT-python-microservice (separate repo)
+**Connection:** Backend proxies requests via PYTHON_SERVICE_URL environment variable
 
 **Key Features:**
 - **Smart Column Detection**: Uses LLM to automatically identify question/answer columns
@@ -229,9 +218,7 @@ This approach works with any Excel layout:
 
 ### Required Variables (`.env`)
 
-**⚠️ IMPORTANT:** Python service uses `api/python-service/.env` (separate file)
-
-**WatsonX.ai (Both root `.env` and `api/python-service/.env`):**
+**WatsonX.ai (root `.env`):**
 ```bash
 # Base URL only - do NOT include /ml/v1/text/chat endpoint
 WATSON_URL=https://ca-tor.ml.cloud.ibm.com
@@ -240,7 +227,12 @@ IBM_WATSONX_PROJECT_ID=your_project_id_here
 WATSON_TEXT_MODEL=mistralai/mistral-small-3-1-24b-instruct-2503
 ```
 
-**Note:** Node.js backend constructs full endpoint URL automatically. Python service also constructs it internally.
+**Python Microservice URL (root `.env`):**
+```bash
+PYTHON_SERVICE_URL=https://craft-python-service.24t5y2wfmvmo.us-east.codeengine.appdomain.cloud
+```
+
+**Note:** Node.js backend constructs full WatsonX endpoint URL automatically and proxies requests to the Python microservice.
 
 **Instana Monitoring:**
 ```bash
@@ -284,7 +276,7 @@ This project follows IBM's Golden Path deployment pattern (see `GOLDEN_PATH_COMP
 
 The Dockerfile uses multi-stage build:
 1. **Builder stage**: Build frontend with Vite, install backend deps
-2. **Final stage**: Copy artifacts, install Python, expose port 3000
+2. **Final stage**: Copy artifacts, expose port 3000
 
 ```bash
 docker build -t excel-ai-processor .
@@ -322,13 +314,14 @@ See `DEPLOYMENT.md` for detailed deployment instructions.
 
 ## Excel Processing Flow
 
-### Current Architecture: Direct Python RAG Processing
+### Current Architecture: Microservices with Code Engine
 
-**Frontend → Python Service → Completed File Download**
+**Frontend → Node.js Backend → Python Microservice (Code Engine) → Response**
 
-1. **Upload & Process** (`POST http://localhost:5000/process`):
-   - Frontend uploads Excel file directly to Python service
-   - No intermediate storage on Node.js server
+1. **Upload & Process** (`POST /api/process`):
+   - Frontend uploads Excel file to Node.js backend
+   - Backend proxies request to Python microservice on Code Engine
+   - No file storage on Node.js server (direct proxy)
    - File processed in memory with temporary files
 
 2. **Smart Column Detection**:
@@ -363,7 +356,10 @@ The old workflow still exists but is **not used by the frontend**:
 - `POST /api/generate` - Update Excel with answers
 - `GET /api/download/:filename` - Download result
 
-**Why Python RAG is Better:**
+**Why Microservices Architecture:**
+- ✅ Independent scaling of AI processing workload
+- ✅ OpenShift cron job doesn't support Python deployments
+- ✅ Code Engine provides better resource management for compute-intensive tasks
 - ✅ Individual question processing with RAG context
 - ✅ Smart column detection handles any Excel layout
 - ✅ Multi-sheet processing with auto-skipping
@@ -499,23 +495,24 @@ Both should return `{ status: "ok" }`.
 
 ## Troubleshooting
 
-### Python Service Not Running
+### Python Microservice Connection Error
 
-**Error:** "Network error. Make sure Python service is running on port 5000."
+**Error:** "Network error connecting to Python microservice"
 
 **Solution:**
-1. Check if Python service is running: `lsof -i :5000`
-2. Start all services: `npm run dev:all`
-3. Or start Python service separately: `npm run python-service`
-4. Check Python service logs for errors (look for model initialization, AstraDB connection)
+1. Verify PYTHON_SERVICE_URL is set correctly in `.env`
+2. Test the microservice endpoint: `curl https://craft-python-service.24t5y2wfmvmo.us-east.codeengine.appdomain.cloud/health`
+3. Check Code Engine application status: `ibmcloud ce application get --name craft-python-service`
+4. Review Code Engine logs: `ibmcloud ce application logs --name craft-python-service`
 
 ### Environment Variable Issues
 
 **Error:** "Missing version in credentials for Cloud Pak for Data" or "Column names not found"
 
 **Solution:**
-1. Verify `api/python-service/.env` exists and has correct values
+1. Verify `.env` has correct WatsonX credentials
 2. Check `WATSON_URL` is base URL only (e.g., `https://ca-tor.ml.cloud.ibm.com`)
+3. Verify Python microservice has correct credentials (check Code Engine secrets)
 3. **Do NOT** include `/ml/v1/text/chat` endpoint in URL
 4. Ensure all required variables are set:
    - `WATSON_URL`
@@ -534,7 +531,7 @@ Both should return `{ status: "ok" }`.
 2. Ensure questions are text (not just numbers or empty cells)
 3. Verify LLM model is accessible and responding
 4. Try with a simple 2-column file (auto-detection should work)
-5. Check Python service logs for LLM response details
+5. Check Code Engine logs for LLM response details: `ibmcloud ce application logs --name craft-python-service`
 
 ### File Not Downloading
 
@@ -543,8 +540,8 @@ Both should return `{ status: "ok" }`.
 **Solution:**
 1. Check browser's download settings (not blocking popups)
 2. Look in browser console for errors
-3. Verify Python service returned file (check Content-Type header)
-4. Try manually accessing: `http://localhost:5000/health`
+3. Verify Python microservice returned file (check Content-Type header)
+4. Try manually accessing: `https://craft-python-service.24t5y2wfmvmo.us-east.codeengine.appdomain.cloud/health`
 
 ### Connection Refused Errors
 

@@ -73,7 +73,6 @@ CRAFT (Compliance Risk Assessment Framework Tool) is a modern web application de
 ### Prerequisites
 
 - **Node.js 18+** - [Download](https://nodejs.org/)
-- **Python 3.8+** - [Download](https://www.python.org/)
 - **npm 9+** - Comes with Node.js
 - **IBM Cloud account** with WatsonX.ai access
 - **Instana account** (optional, for monitoring)
@@ -94,11 +93,11 @@ npm install
 cp .env.example .env
 # Edit .env with your API keys and Python microservice URL
 
-# 4. Start frontend and backend
+# 4. Start frontend and backend (connects to deployed Python microservice)
 npm run dev:all
 ```
 
-**Note:** The Python microservice is deployed separately on IBM Code Engine. The webapp connects to it via the `PYTHON_SERVICE_URL` environment variable.
+**Note:** The Python microservice is deployed separately on IBM Code Engine at `https://craft-python-service.24t5y2wfmvmo.us-east.codeengine.appdomain.cloud`. The webapp connects to it via the `PYTHON_SERVICE_URL` environment variable. You do NOT need to run Python locally.
 
 ### Production Deployment
 
@@ -159,7 +158,7 @@ cd CRAFT_web_app/excel-ai-processor
 npm run dev
 ```
 
-**Common Error**: Running `npm run dev` alone will cause `ECONNREFUSED` errors because the backend and Python service won't be running.
+**Common Error**: Running `npm run dev` alone will cause `ECONNREFUSED` errors because the backend won't be running.
 
 ### Alternative: Run Services Separately
 
@@ -170,8 +169,6 @@ npm run server
 # Terminal 2 - Frontend
 npm run dev
 
-# Terminal 3 - Python Service
-npm run python-service
 ```
 
 ### Docker Development
