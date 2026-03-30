@@ -8,6 +8,7 @@ import {
   Tag,
 } from '@carbon/react';
 import { UserMultiple, Star } from '@carbon/icons-react';
+import DisclaimerNotice from '../components/DisclaimerNotice';
 
 interface TeamMember {
   name: string;
@@ -56,6 +57,8 @@ const TeamPage: React.FC = () => {
               Meet the Experience Engineering team behind CRAFT - the Compliance Review and Analysis Facilitation Tool.
             </p>
           </div>
+
+          <DisclaimerNotice />
 
           <Grid narrow>
             {teamMembers.map((member) => (

@@ -17,6 +17,7 @@ import {
   ProgressBar,
 } from '@carbon/react';
 import { CheckmarkFilled, WarningFilled } from '@carbon/icons-react';
+import DisclaimerNotice from '../components/DisclaimerNotice';
 
 interface ValidationResult {
   question: string;
@@ -69,6 +70,8 @@ const ValidationPage: React.FC = () => {
               Review and validate AI-generated answers before finalizing your Excel file.
             </p>
           </div>
+
+          <DisclaimerNotice />
 
           <InlineNotification
             kind="warning"

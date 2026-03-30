@@ -11,6 +11,7 @@ import xlsx from 'xlsx';
 import fs from 'fs/promises';
 import { createReadStream } from 'fs';
 import { instanaTrackingMiddleware, trackEvent, trackError } from './instana-middleware.js';
+import { downloadToCache, serveCachedFile, isCached, cleanupOldFiles } from './services/file-cache.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -997,11 +998,68 @@ async function getHttpModule() {
 /**
  * GET /api/python/job/:jobId/status  — poll job status (python process jobs)
  */
+/**
+ * GET /api/python/health — check if Python service is available
+ */
+app.get('/api/python/health', async (req, res) => {
+  try {
+    const response = await fetch(`${PYTHON_SERVICE_URL}/health`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      res.json({
+        available: true,
+        service: 'AI Processing Service',
+        ...data
+      });
+    } else {
+      res.json({
+        available: false,
+        service: 'AI Processing Service',
+        message: 'Service is starting up or unavailable'
+      });
+    }
+  } catch (error) {
+    console.error('Error checking Python service health:', error);
+    res.json({
+      available: false,
+      service: 'AI Processing Service',
+      message: 'Service is starting up. Please wait a moment and try again.'
+    });
+  }
+});
+
 app.get('/api/python/job/:jobId/status', async (req, res) => {
   try {
     const { jobId } = req.params;
     const response = await fetch(`${PYTHON_SERVICE_URL}/job/${jobId}/status`);
     const result = await response.json();
+    
+    // Auto-download file to cache when job completes
+    if (result.status === 'completed' && !isCached(jobId)) {
+      console.log(`Job ${jobId} completed. Auto-downloading to cache...`);
+      const downloadResult = await downloadToCache(
+        PYTHON_SERVICE_URL,
+        jobId,
+        `/job/${encodeURIComponent(jobId)}/download`
+      );
+      
+      if (downloadResult.success) {
+        console.log(`Successfully cached file for job ${jobId}: ${downloadResult.filename}`);
+        result.cached = true;
+        result.cached_filename = downloadResult.filename;
+      } else {
+        console.error(`Failed to cache file for job ${jobId}:`, downloadResult.error);
+        result.cached = false;
+        result.cache_error = downloadResult.error;
+      }
+    } else if (result.status === 'completed' && isCached(jobId)) {
+      result.cached = true;
+    }
+    
     res.status(response.status).json(result);
   } catch (error) {
     console.error('Error polling python job status:', error);
@@ -1015,6 +1073,16 @@ app.get('/api/python/job/:jobId/status', async (req, res) => {
 app.get('/api/python/job/:jobId/download', async (req, res) => {
   try {
     const { jobId } = req.params;
+    
+    // Try to serve from cache first
+    if (serveCachedFile(res, jobId)) {
+      console.log(`Serving cached file for job ${jobId}`);
+      trackEvent('python_job_download_cached', { jobId });
+      return;
+    }
+    
+    // Fallback to proxying from Python service if not cached
+    console.log(`File not cached for job ${jobId}, proxying from Python service`);
     const httpModule = await getHttpModule();
     const url = new URL(PYTHON_SERVICE_URL);
 
@@ -1031,6 +1099,7 @@ app.get('/api/python/job/:jobId/download', async (req, res) => {
         const disposition = proxyRes.headers['content-disposition'] || `attachment; filename="result.xlsx"`;
         res.setHeader('Content-Disposition', disposition);
         proxyRes.pipe(res);
+        trackEvent('python_job_download_proxied', { jobId });
       } else {
         let errorData = '';
         proxyRes.on('data', (chunk) => { errorData += chunk; });
@@ -1064,6 +1133,29 @@ app.get('/api/delta/job/:jobId/status', async (req, res) => {
     const { jobId } = req.params;
     const response = await fetch(`${PYTHON_SERVICE_URL}/job/${jobId}/status`);
     const result = await response.json();
+    
+    // Auto-download file to cache when job completes
+    if (result.status === 'completed' && !isCached(jobId)) {
+      console.log(`Delta job ${jobId} completed. Auto-downloading to cache...`);
+      const downloadResult = await downloadToCache(
+        PYTHON_SERVICE_URL,
+        jobId,
+        `/job/${encodeURIComponent(jobId)}/download`
+      );
+      
+      if (downloadResult.success) {
+        console.log(`Successfully cached file for delta job ${jobId}: ${downloadResult.filename}`);
+        result.cached = true;
+        result.cached_filename = downloadResult.filename;
+      } else {
+        console.error(`Failed to cache file for delta job ${jobId}:`, downloadResult.error);
+        result.cached = false;
+        result.cache_error = downloadResult.error;
+      }
+    } else if (result.status === 'completed' && isCached(jobId)) {
+      result.cached = true;
+    }
+    
     res.status(response.status).json(result);
   } catch (error) {
     console.error('Error polling delta job status:', error);
@@ -1077,6 +1169,16 @@ app.get('/api/delta/job/:jobId/status', async (req, res) => {
 app.get('/api/delta/job/:jobId/download', async (req, res) => {
   try {
     const { jobId } = req.params;
+    
+    // Try to serve from cache first
+    if (serveCachedFile(res, jobId)) {
+      console.log(`Serving cached file for delta job ${jobId}`);
+      trackEvent('delta_job_download_cached', { jobId });
+      return;
+    }
+    
+    // Fallback to proxying from Python service if not cached
+    console.log(`File not cached for delta job ${jobId}, proxying from Python service`);
     const httpModule = await getHttpModule();
     const url = new URL(PYTHON_SERVICE_URL);
 
@@ -1093,6 +1195,7 @@ app.get('/api/delta/job/:jobId/download', async (req, res) => {
         const disposition = proxyRes.headers['content-disposition'] || `attachment; filename="delta_result.xlsx"`;
         res.setHeader('Content-Disposition', disposition);
         proxyRes.pipe(res);
+        trackEvent('delta_job_download_proxied', { jobId });
       } else {
         let errorData = '';
         proxyRes.on('data', (chunk) => { errorData += chunk; });
@@ -1117,6 +1220,60 @@ app.get('/api/delta/job/:jobId/download', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+/* ========================================================================
+ * FEEDBACK ENDPOINT
+ * ===================================================================== */
+
+/**
+ * POST /api/feedback
+ * Submit user feedback
+ */
+app.post('/api/feedback', async (req, res) => {
+  const operation = 'submit_feedback';
+  
+  try {
+    trackEvent(operation, { category: req.body.category });
+    
+    const { name, email, category, subject, message } = req.body;
+    
+    // Validate required fields
+    if (!name || !email || !category || !subject || !message) {
+      return res.status(400).json({
+        error: 'All fields are required',
+        operation
+      });
+    }
+    
+    // Log feedback to console (in production, you'd save to database or send email)
+    console.log('📝 Feedback received:');
+    console.log(`  Name: ${name}`);
+    console.log(`  Email: ${email}`);
+    console.log(`  Category: ${category}`);
+    console.log(`  Subject: ${subject}`);
+    console.log(`  Message: ${message}`);
+    console.log(`  Timestamp: ${new Date().toISOString()}`);
+    
+    // In a production environment, you would:
+    // 1. Save to a database
+    // 2. Send an email notification
+    // 3. Create a ticket in your issue tracking system
+    
+    res.json({
+      success: true,
+      message: 'Feedback submitted successfully',
+      operation
+    });
+    
+  } catch (error) {
+    console.error('Error submitting feedback:', error);
+    trackError(operation, error);
+    res.status(500).json({
+      error: 'Failed to submit feedback',
+      operation
+    });
+  }
+});
+
 
 /* ========================================================================
  * SPA FALLBACK - Must be BEFORE error handling!
@@ -1158,6 +1315,16 @@ app.listen(PORT, () => {
   console.log(`📊 Processing Excel files with WatsonX.ai`);
   console.log(`📈 Instana monitoring enabled`);
   console.log(`🌐 Serving frontend from /dist`);
+  console.log(`💾 File cache enabled at /tmp/downloads`);
+  
+  // Schedule cleanup of old cached files every 6 hours
+  setInterval(() => {
+    console.log('Running scheduled cache cleanup...');
+    cleanupOldFiles(24); // Delete files older than 24 hours
+  }, 6 * 60 * 60 * 1000); // Every 6 hours
+  
+  // Run initial cleanup on startup
+  cleanupOldFiles(24);
 });
 
 // Made with Bob

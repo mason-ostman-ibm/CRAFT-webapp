@@ -9,6 +9,7 @@ import {
   Stack,
 } from '@carbon/react';
 import { Upload, DocumentTasks, CheckmarkOutline } from '@carbon/icons-react';
+import DisclaimerNotice from '../components/DisclaimerNotice';
 
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
@@ -26,6 +27,8 @@ const HomePage: React.FC = () => {
               Upload, process, and validate your files with IBM WatsonX.ai.
             </p>
           </div>
+
+          <DisclaimerNotice />
 
           <Grid narrow>
             <Column lg={5} md={4} sm={4}>

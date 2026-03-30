@@ -9,6 +9,7 @@ import ProcessPage from "./pages/ProcessPage";
 import DeltaPage from "./pages/DeltaPage";
 import ValidationPage from "./pages/ValidationPage";
 import TeamPage from "./pages/TeamPage";
+import FeedbackPage from "./pages/FeedbackPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -24,6 +25,7 @@ const App: React.FC = () => (
             <Route path="delta" element={<DeltaPage />} />
             <Route path="validate" element={<ValidationPage />} />
             <Route path="team" element={<TeamPage />} />
+            <Route path="feedback" element={<FeedbackPage />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

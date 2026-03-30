@@ -23,6 +23,7 @@ import {
   Toggle,
 } from '@carbon/react';
 import { Download, Upload, Renew, CheckmarkFilled, WarningFilled } from '@carbon/icons-react';
+import DisclaimerNotice from '../components/DisclaimerNotice';
 
 interface BaselineInfo {
   exists: boolean;
@@ -88,6 +89,7 @@ const DeltaPage: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [processingResults, setProcessingResults] = useState<{
     summary: ProcessingSummary;
@@ -110,6 +112,7 @@ const DeltaPage: React.FC = () => {
   }, []);
 
   const loadDeltaStatus = async () => {
+    setIsCheckingHealth(true);
     try {
       const response = await fetch('/api/delta/status');
       const data = await response.json();
@@ -121,6 +124,8 @@ const DeltaPage: React.FC = () => {
     } catch (err) {
       console.error('Error loading delta status:', err);
       setError('Failed to check Delta Service status');
+    } finally {
+      setIsCheckingHealth(false);
     }
   };
 
@@ -328,8 +333,25 @@ const DeltaPage: React.FC = () => {
             </p>
           </div>
 
-          {/* Service Status */}
-          {deltaStatus && (
+          <DisclaimerNotice />
+
+          {/* Service Status Check */}
+          {isCheckingHealth && (
+            <Tile style={{ backgroundColor: '#262626' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <Loading small withOverlay={false} />
+                <div>
+                  <Heading style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>Checking Service Status</Heading>
+                  <p style={{ fontSize: '0.875rem', color: '#c6c6c6' }}>
+                    Verifying that the Delta service is ready...
+                  </p>
+                </div>
+              </div>
+            </Tile>
+          )}
+
+          {/* Service Status Display */}
+          {!isCheckingHealth && deltaStatus && (
             <Tile style={{ backgroundColor: '#262626' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
@@ -342,13 +364,23 @@ const DeltaPage: React.FC = () => {
                     )}
                   </p>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <p style={{ fontSize: '0.75rem', color: '#8d8d8d' }}>
-                    Similarity Threshold: {(deltaStatus.similarity_threshold * 100).toFixed(0)}%
-                  </p>
-                  <p style={{ fontSize: '0.75rem', color: '#8d8d8d' }}>
-                    LLM Verification: {deltaStatus.llm_verification_enabled ? 'Enabled' : 'Disabled'}
-                  </p>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.5rem' }}>
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ fontSize: '0.75rem', color: '#8d8d8d' }}>
+                      Similarity Threshold: {(deltaStatus.similarity_threshold * 100).toFixed(0)}%
+                    </p>
+                    <p style={{ fontSize: '0.75rem', color: '#8d8d8d' }}>
+                      LLM Verification: {deltaStatus.llm_verification_enabled ? 'Enabled' : 'Disabled'}
+                    </p>
+                  </div>
+                  <Button
+                    kind="ghost"
+                    size="sm"
+                    onClick={loadDeltaStatus}
+                    disabled={isCheckingHealth}
+                  >
+                    Refresh Status
+                  </Button>
                 </div>
               </div>
             </Tile>

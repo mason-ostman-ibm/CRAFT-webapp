@@ -22,6 +22,7 @@ import {
   ProgressBar,
 } from '@carbon/react';
 import { Download, Renew, CheckmarkFilled } from '@carbon/icons-react';
+import DisclaimerNotice from '../components/DisclaimerNotice';
 
 interface Question {
   question: string;
@@ -56,6 +57,12 @@ interface ProcessResult {
   qa_pairs: QaPair[];
 }
 
+interface ServiceStatus {
+  available: boolean;
+  service: string;
+  message?: string;
+}
+
 const ProcessPage: React.FC = () => {
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
@@ -68,7 +75,14 @@ const ProcessPage: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [processResult, setProcessResult] = useState<ProcessResult | null>(null);
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Load service status on mount
+  useEffect(() => {
+    loadServiceStatus();
+  }, []);
 
   // Clean up polling interval on unmount
   useEffect(() => {
@@ -76,6 +90,25 @@ const ProcessPage: React.FC = () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
   }, []);
+
+  const loadServiceStatus = async () => {
+    setIsCheckingHealth(true);
+    try {
+      const response = await fetch('/api/python/health');
+      const data = await response.json();
+      setServiceStatus(data);
+
+      if (!data.available) {
+        setError('Processing service is not available. The pod may still be starting up. Please wait a moment and refresh the page.');
+      }
+    } catch (err) {
+      console.error('Error loading service status:', err);
+      setError('Failed to check processing service status. The service may still be starting up.');
+      setServiceStatus({ available: false, service: 'AI Processing Service' });
+    } finally {
+      setIsCheckingHealth(false);
+    }
+  };
 
   const handleFileChange = (event: any) => {
     const files = event.target?.files || event.addedFiles;
@@ -220,6 +253,54 @@ const ProcessPage: React.FC = () => {
             </p>
           </div>
 
+          <DisclaimerNotice />
+
+          {/* Service Status Check */}
+          {isCheckingHealth && (
+            <Tile style={{ backgroundColor: '#262626' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <Loading small withOverlay={false} />
+                <div>
+                  <Heading style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>Checking Service Status</Heading>
+                  <p style={{ fontSize: '0.875rem', color: '#c6c6c6' }}>
+                    Verifying that the AI processing service is ready...
+                  </p>
+                </div>
+              </div>
+            </Tile>
+          )}
+
+          {/* Service Status Display */}
+          {!isCheckingHealth && serviceStatus && (
+            <Tile style={{ backgroundColor: '#262626' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <Heading style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>Service Status</Heading>
+                  <p style={{ fontSize: '0.875rem', color: '#c6c6c6' }}>
+                    {serviceStatus.available ? (
+                      <span style={{ color: '#42be65' }}>✓ AI Processing Service is ready</span>
+                    ) : (
+                      <span style={{ color: '#ff832b' }}>⚠ AI Processing Service is starting up</span>
+                    )}
+                  </p>
+                  {serviceStatus.message && (
+                    <p style={{ fontSize: '0.75rem', color: '#8d8d8d', marginTop: '0.25rem' }}>
+                      {serviceStatus.message}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  kind="ghost"
+                  size="sm"
+                  onClick={loadServiceStatus}
+                  disabled={isCheckingHealth}
+                >
+                  Refresh Status
+                </Button>
+              </div>
+            </Tile>
+          )}
+
           {error && (
             <InlineNotification
               kind="error"
@@ -247,12 +328,12 @@ const ProcessPage: React.FC = () => {
               filenameStatus="edit"
               accept={['.xlsx', '.xls']}
               onChange={handleFileChange}
-              disabled={isUploading || isProcessing}
+              disabled={isUploading || isProcessing || !serviceStatus?.available}
             />
             <Button
               style={{ marginTop: '1rem' }}
               onClick={handleUpload}
-              disabled={!file || isUploading || isProcessing}
+              disabled={!file || isUploading || isProcessing || !serviceStatus?.available}
             >
               {isUploading ? 'Uploading...' : 'Upload File'}
             </Button>
@@ -273,7 +354,7 @@ const ProcessPage: React.FC = () => {
                 <Button
                   style={{ marginTop: '1rem' }}
                   onClick={handleProcess}
-                  disabled={isProcessing}
+                  disabled={isProcessing || !serviceStatus?.available}
                   renderIcon={isProcessing ? undefined : Renew}
                 >
                   {isProcessing ? 'Processing with AI...' : 'Process with AI'}

@@ -13,7 +13,7 @@ The CRAFT (Compliance Risk Assessment Framework Tool) application uses a **micro
                          │ HTTPS
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              OpenShift/DINERO Cluster                        │
+│              OpenShift/DINERO Cluster                       │
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │         React Frontend + Node.js Backend              │  │
 │  │  - Carbon Design System UI                            │  │
@@ -21,7 +21,7 @@ The CRAFT (Compliance Risk Assessment Framework Tool) application uses a **micro
 │  │  - File Upload/Download                               │  │
 │  │  - Request Proxying                                   │  │
 │  └──────────────────────┬────────────────────────────────┘  │
-└─────────────────────────┼────────────────────────────────────┘
+└─────────────────────────┼───────────────────────────────────┘
                           │ HTTP/REST API
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
