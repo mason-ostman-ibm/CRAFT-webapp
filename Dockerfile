@@ -25,33 +25,11 @@ WORKDIR /build
 COPY package*.json ./
 RUN npm ci --only=production
 
-<<<<<<< Updated upstream
-# Stage 3: Python Dependencies
-FROM python:3.11-alpine AS python-builder
-
-WORKDIR /build
-
-# Install build dependencies
-RUN apk add --no-cache gcc musl-dev linux-headers
-
-# Copy and install Python dependencies
-COPY api/python-service/requirements.txt ./
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
-
-# Stage 4: Final Production Image
-=======
 # Stage 3: Final Production Image
->>>>>>> Stashed changes
 FROM node:20-alpine
 
 WORKDIR /app
 
-<<<<<<< Updated upstream
-# Install Python runtime (no build tools needed)
-RUN apk add --no-cache python3 py3-pip
-
-=======
->>>>>>> Stashed changes
 # Copy frontend build from builder
 COPY --from=frontend-builder /build/dist ./dist
 
