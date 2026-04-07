@@ -23,6 +23,7 @@ import {
 } from '@carbon/react';
 import { Download, Renew, CheckmarkFilled } from '@carbon/icons-react';
 import DisclaimerNotice from '../components/DisclaimerNotice';
+import ProcessingProgress from '../components/ProcessingProgress';
 
 interface Question {
   question: string;
@@ -78,6 +79,12 @@ const ProcessPage: React.FC = () => {
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [isCheckingHealth, setIsCheckingHealth] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  
+  // Progress tracking state
+  const [processingStartTime, setProcessingStartTime] = useState<number | null>(null);
+  const [estimatedProgress, setEstimatedProgress] = useState(0);
+  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<number | null>(null);
+  const [elapsedTime, setElapsedTime] = useState(0);
 
   // Load service status on mount
   useEffect(() => {
@@ -164,6 +171,12 @@ const ProcessPage: React.FC = () => {
     setSuccess(null);
     setProcessResult(null);
     setStatusMessage('Submitting job...');
+    
+    // Reset progress tracking
+    setProcessingStartTime(null);
+    setEstimatedProgress(0);
+    setEstimatedTimeRemaining(null);
+    setElapsedTime(0);
 
     try {
       const formData = new FormData();
@@ -196,6 +209,49 @@ const ProcessPage: React.FC = () => {
             setStatusMessage(statusData.message);
           }
 
+          // Start timer when processing begins
+          if (statusData.status === 'processing' && !processingStartTime) {
+            setProcessingStartTime(Date.now());
+          }
+
+          // Use real progress data from microservice if available
+          if (statusData.progress) {
+            const progress = statusData.progress;
+            
+            // Update progress with real data from microservice
+            setEstimatedProgress(progress.percentage || 0);
+            
+            // Use microservice's time estimate if available
+            if (progress.estimated_time_remaining !== null && progress.estimated_time_remaining !== undefined) {
+              setEstimatedTimeRemaining(progress.estimated_time_remaining);
+            } else {
+              setEstimatedTimeRemaining(null);
+            }
+            
+            // Calculate elapsed time
+            if (processingStartTime) {
+              const elapsed = (Date.now() - processingStartTime) / 1000;
+              setElapsedTime(elapsed);
+            }
+            
+            // Update status message with current question if available
+            if (progress.current_question && progress.stage === 'processing') {
+              setStatusMessage(`Processing: ${progress.current_question.substring(0, 80)}...`);
+            }
+          } else if (processingStartTime) {
+            // Fallback to time-based estimation if no progress data
+            const elapsed = (Date.now() - processingStartTime) / 1000;
+            setElapsedTime(elapsed);
+            
+            // Simple time-based progress estimation
+            const estimatedTotal = 180; // 3 minutes estimate
+            const calculatedProgress = Math.min((elapsed / estimatedTotal) * 95, 95);
+            setEstimatedProgress(calculatedProgress);
+            
+            const remaining = Math.max(estimatedTotal - elapsed, 0);
+            setEstimatedTimeRemaining(remaining > 0 ? remaining : null);
+          }
+
           if (statusData.status === 'completed') {
             clearInterval(pollingRef.current!);
             pollingRef.current = null;
@@ -208,6 +264,8 @@ const ProcessPage: React.FC = () => {
               `Processing complete! Answered ${result.questions_answered} questions across ${result.sheets_processed} sheet(s).`
             );
             setIsProcessing(false);
+            setEstimatedProgress(100);
+            setEstimatedTimeRemaining(0);
           } else if (statusData.status === 'failed') {
             clearInterval(pollingRef.current!);
             pollingRef.current = null;
@@ -240,6 +298,12 @@ const ProcessPage: React.FC = () => {
     setSuccess(null);
     setDownloadUrl(null);
     setProcessResult(null);
+    
+    // Reset progress tracking
+    setProcessingStartTime(null);
+    setEstimatedProgress(0);
+    setEstimatedTimeRemaining(null);
+    setElapsedTime(0);
   };
 
   return (
@@ -359,12 +423,18 @@ const ProcessPage: React.FC = () => {
                 >
                   {isProcessing ? 'Processing with AI...' : 'Process with AI'}
                 </Button>
-                {isProcessing && (
-                  <div style={{ marginTop: '1rem' }}>
-                    <Loading description={statusMessage || 'Processing with AI — this may take a few minutes...'} />
-                  </div>
-                )}
               </div>
+              
+              {/* Enhanced Progress Display */}
+              {isProcessing && (
+                <ProcessingProgress
+                  progress={estimatedProgress}
+                  timeRemaining={estimatedTimeRemaining}
+                  statusMessage={statusMessage}
+                  questionCount={uploadData?.totalQuestions}
+                  elapsedTime={elapsedTime}
+                />
+              )}
             </>
           )}
 

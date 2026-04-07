@@ -1044,7 +1044,7 @@ app.get('/api/python/job/:jobId/status', async (req, res) => {
       const downloadResult = await downloadToCache(
         PYTHON_SERVICE_URL,
         jobId,
-        `/job/${encodeURIComponent(jobId)}/download`
+        `/job/${encodeURIComponent(jobId)}/result`
       );
       
       if (downloadResult.success) {
@@ -1089,7 +1089,7 @@ app.get('/api/python/job/:jobId/download', async (req, res) => {
     const options = {
       hostname: url.hostname,
       port: url.port || (url.protocol === 'https:' ? 443 : 80),
-      path: `/job/${encodeURIComponent(jobId)}/download`,
+      path: `/job/${encodeURIComponent(jobId)}/result`,
       method: 'GET'
     };
 
