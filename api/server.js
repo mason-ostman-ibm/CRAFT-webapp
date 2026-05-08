@@ -210,21 +210,24 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
     // Read the Excel file
     const workbook = xlsx.readFile(req.file.path);
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    
-    // Convert to JSON
-    const data = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
-    
-    // Extract questions (assuming first column contains questions, skip header row)
-    const questions = data
-      .slice(1)
-      .filter(row => row[0] && typeof row[0] === 'string')
-      .map((row, index) => ({
-        question: row[0],
-        answer: row[1] || '',
-        row: index
-      }));
+
+    // Iterate every sheet so multi-sheet workbooks aren't undercounted.
+    const questions = [];
+    for (const sheetName of workbook.SheetNames) {
+      const worksheet = workbook.Sheets[sheetName];
+      if (!worksheet) continue;
+      const data = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+      const sheetQuestions = data
+        .slice(1)
+        .filter(row => row[0] && typeof row[0] === 'string')
+        .map((row, index) => ({
+          question: row[0],
+          answer: row[1] || '',
+          row: index,
+          sheet: sheetName
+        }));
+      questions.push(...sheetQuestions);
+    }
 
     res.json({
       success: true,
@@ -1036,6 +1039,28 @@ app.get('/api/python/job/:jobId/status', async (req, res) => {
   try {
     const { jobId } = req.params;
     const response = await fetch(`${PYTHON_SERVICE_URL}/job/${jobId}/status`);
+    
+    // Handle 404 - Job not found
+    if (response.status === 404) {
+      console.log(`Job ${jobId} not found (404)`);
+      return res.status(404).json({
+        status: 'failed',
+        error: 'Job not found',
+        message: 'Job not found or expired. Jobs expire after 24 hours.'
+      });
+    }
+    
+    // Handle other errors
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Error from Python service for job ${jobId}:`, errorText);
+      return res.status(response.status).json({
+        status: 'failed',
+        error: `Python service error: ${errorText}`,
+        message: 'Failed to get job status'
+      });
+    }
+    
     const result = await response.json();
     
     // Auto-download file to cache when job completes
@@ -1063,7 +1088,11 @@ app.get('/api/python/job/:jobId/status', async (req, res) => {
     res.status(response.status).json(result);
   } catch (error) {
     console.error('Error polling python job status:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      status: 'failed',
+      error: error.message,
+      message: 'Network error while checking job status'
+    });
   }
 });
 
@@ -1132,6 +1161,28 @@ app.get('/api/delta/job/:jobId/status', async (req, res) => {
   try {
     const { jobId } = req.params;
     const response = await fetch(`${PYTHON_SERVICE_URL}/job/${jobId}/status`);
+    
+    // Handle 404 - Job not found
+    if (response.status === 404) {
+      console.log(`Delta job ${jobId} not found (404)`);
+      return res.status(404).json({
+        status: 'failed',
+        error: 'Job not found',
+        message: 'Job not found or expired. Jobs expire after 24 hours.'
+      });
+    }
+    
+    // Handle other errors
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Error from Python service for delta job ${jobId}:`, errorText);
+      return res.status(response.status).json({
+        status: 'failed',
+        error: `Python service error: ${errorText}`,
+        message: 'Failed to get job status'
+      });
+    }
+    
     const result = await response.json();
     
     // Auto-download file to cache when job completes
@@ -1159,7 +1210,11 @@ app.get('/api/delta/job/:jobId/status', async (req, res) => {
     res.status(response.status).json(result);
   } catch (error) {
     console.error('Error polling delta job status:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      status: 'failed',
+      error: error.message,
+      message: 'Network error while checking job status'
+    });
   }
 });
 

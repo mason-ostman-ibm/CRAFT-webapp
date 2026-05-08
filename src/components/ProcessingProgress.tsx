@@ -18,12 +18,13 @@ const ProcessingProgress: React.FC<ProcessingProgressProps> = ({
   elapsedTime,
 }) => {
   // Format time in a human-readable way
-  const formatTime = (seconds: number): string => {
+  const formatTime = (seconds: number, mode: 'floor' | 'ceil' = 'ceil'): string => {
+    const round = mode === 'floor' ? Math.floor : Math.ceil;
     if (seconds < 60) {
-      return `${Math.ceil(seconds)}s`;
+      return `${round(seconds)}s`;
     }
     const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = Math.ceil(seconds % 60);
+    const remainingSeconds = round(seconds % 60);
     return `${minutes}m ${remainingSeconds}s`;
   };
 
@@ -119,7 +120,7 @@ const ProcessingProgress: React.FC<ProcessingProgressProps> = ({
               }}
             >
               <div style={{ fontSize: '1.75rem', fontWeight: 'bold', color: '#42be65' }}>
-                {formatTime(elapsedTime)}
+                {formatTime(elapsedTime, 'floor')}
               </div>
               <div style={{ fontSize: '0.875rem', color: '#c6c6c6', marginTop: '0.25rem' }}>
                 Elapsed Time

@@ -2,6 +2,7 @@
 
 AI-powered Excel processing application for ATLs and MDs using IBM Carbon Design System and WatsonX.ai.
 
+> **Maintainers:** for the deployment + maintenance entry point covering both this web app (DINERO/OpenShift) and the Python microservice (Code Engine), see [`../../MAINTENANCE.md`](../../MAINTENANCE.md).
 
 ## New to This Project?
 

@@ -79,12 +79,18 @@ const ProcessPage: React.FC = () => {
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [isCheckingHealth, setIsCheckingHealth] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  
+  // Ref so the polling interval's stale closure can read the latest start time
+  // without re-creating the interval. Without this, the closure always sees
+  // `null` and re-sets start time on every poll, resetting elapsed time.
+  const processingStartTimeRef = useRef<number | null>(null);
+
   // Progress tracking state
   const [processingStartTime, setProcessingStartTime] = useState<number | null>(null);
   const [estimatedProgress, setEstimatedProgress] = useState(0);
   const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
+  const [serverQuestionCount, setServerQuestionCount] = useState<number | null>(null);
+  const [estimateBase, setEstimateBase] = useState<{ value: number; at: number } | null>(null);
 
   // Load service status on mount
   useEffect(() => {
@@ -97,6 +103,23 @@ const ProcessPage: React.FC = () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
   }, []);
+
+  // Smooth 1s tick for elapsed time and projected estimated-remaining,
+  // independent of the 3s status poll cadence.
+  useEffect(() => {
+    if (!isProcessing || processingStartTime === null) return;
+    const tick = () => {
+      setElapsedTime((Date.now() - processingStartTime) / 1000);
+      setEstimatedTimeRemaining(
+        estimateBase
+          ? Math.max(0, estimateBase.value - (Date.now() - estimateBase.at) / 1000)
+          : null
+      );
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isProcessing, processingStartTime, estimateBase]);
 
   const loadServiceStatus = async () => {
     setIsCheckingHealth(true);
@@ -173,10 +196,13 @@ const ProcessPage: React.FC = () => {
     setStatusMessage('Submitting job...');
     
     // Reset progress tracking
+    processingStartTimeRef.current = null;
     setProcessingStartTime(null);
     setEstimatedProgress(0);
     setEstimatedTimeRemaining(null);
     setElapsedTime(0);
+    setServerQuestionCount(null);
+    setEstimateBase(null);
 
     try {
       const formData = new FormData();
@@ -199,57 +225,135 @@ const ProcessPage: React.FC = () => {
       const jobId: string = data.job_id;
       setStatusMessage('Job queued. Processing will start shortly...');
 
+      // Track retry count for initial 404s (race condition handling)
+      let retryCount = 0;
+      const maxInitialRetries = 3;
+
+      // Wait 1 second before first poll to avoid race condition
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
       // Poll every 3 seconds until completed or failed
       pollingRef.current = setInterval(async () => {
         try {
           const statusRes = await fetch(`/api/python/job/${jobId}/status`);
+          
+          // Handle 404 with retry logic for initial polls (race condition)
+          if (statusRes.status === 404) {
+            retryCount++;
+            if (retryCount <= maxInitialRetries) {
+              console.log(`Job ${jobId} not found yet, retry ${retryCount}/${maxInitialRetries}`);
+              return; // Continue polling
+            }
+            // After max retries, stop polling
+            clearInterval(pollingRef.current!);
+            pollingRef.current = null;
+            setError('Job not found. It may have expired or failed to create.');
+            setIsProcessing(false);
+            return;
+          }
+          
+          // Reset retry count on successful response
+          retryCount = 0;
+          
+          // Stop polling on other HTTP errors
+          if (!statusRes.ok) {
+            clearInterval(pollingRef.current!);
+            pollingRef.current = null;
+            setError(`Failed to check job status: ${statusRes.statusText}`);
+            setIsProcessing(false);
+            return;
+          }
+          
           const statusData = await statusRes.json();
+          
+          // Stop polling if no status field (malformed response)
+          if (!statusData.status) {
+            clearInterval(pollingRef.current!);
+            pollingRef.current = null;
+            setError('Invalid response from server. Job may not exist.');
+            setIsProcessing(false);
+            return;
+          }
 
           if (statusData.message) {
             setStatusMessage(statusData.message);
           }
 
-          // Start timer when processing begins
-          if (statusData.status === 'processing' && !processingStartTime) {
-            setProcessingStartTime(Date.now());
+          // Start timer when processing begins. Use the ref so we don't
+          // re-set it every poll (the interval's closure has a stale
+          // `processingStartTime` of null).
+          if (statusData.status === 'processing' && processingStartTimeRef.current === null) {
+            const now = Date.now();
+            processingStartTimeRef.current = now;
+            setProcessingStartTime(now);
           }
+
+          const startedAt = processingStartTimeRef.current;
 
           // Use real progress data from microservice if available
           if (statusData.progress) {
             const progress = statusData.progress;
-            
+            const pct = progress.percentage || 0;
+
             // Update progress with real data from microservice
-            setEstimatedProgress(progress.percentage || 0);
-            
-            // Use microservice's time estimate if available
-            if (progress.estimated_time_remaining !== null && progress.estimated_time_remaining !== undefined) {
-              setEstimatedTimeRemaining(progress.estimated_time_remaining);
+            setEstimatedProgress(pct);
+
+            // Authoritative question count from Python once it reports it
+            if (typeof progress.total_questions === 'number' && progress.total_questions > 0) {
+              setServerQuestionCount(progress.total_questions);
+            }
+
+            // Prefer a local extrapolation from actual elapsed time once we
+            // have a meaningful percentage — the server's rate-based estimate
+            // overshoots early because the rolling rate is still warming up.
+            // Fall back to the server's value while pct is too small to project.
+            let target: number | null = null;
+            if (startedAt !== null && pct >= 5 && pct < 100) {
+              const elapsedSec = (Date.now() - startedAt) / 1000;
+              target = elapsedSec * (100 - pct) / pct;
+            } else if (
+              progress.estimated_time_remaining !== null &&
+              progress.estimated_time_remaining !== undefined
+            ) {
+              target = progress.estimated_time_remaining;
+            }
+
+            if (target !== null) {
+              const serverValue = target;
+              setEstimateBase((prev) => {
+                if (!prev) return { value: serverValue, at: Date.now() };
+                const projected = Math.max(0, prev.value - (Date.now() - prev.at) / 1000);
+                const delta = Math.abs(serverValue - projected);
+                // Snap on meaningful corrections OR when our projection has
+                // run past the new target (so we don't undershoot to 0 and
+                // then leap back up).
+                if (
+                  serverValue < projected - 2 ||
+                  (delta > 5 && delta > projected * 0.2)
+                ) {
+                  return { value: serverValue, at: Date.now() };
+                }
+                return prev;
+              });
             } else {
-              setEstimatedTimeRemaining(null);
+              setEstimateBase(null);
             }
-            
-            // Calculate elapsed time
-            if (processingStartTime) {
-              const elapsed = (Date.now() - processingStartTime) / 1000;
-              setElapsedTime(elapsed);
-            }
-            
+
             // Update status message with current question if available
             if (progress.current_question && progress.stage === 'processing') {
               setStatusMessage(`Processing: ${progress.current_question.substring(0, 80)}...`);
             }
-          } else if (processingStartTime) {
+          } else if (startedAt !== null) {
             // Fallback to time-based estimation if no progress data
-            const elapsed = (Date.now() - processingStartTime) / 1000;
-            setElapsedTime(elapsed);
-            
+            const elapsed = (Date.now() - startedAt) / 1000;
+
             // Simple time-based progress estimation
             const estimatedTotal = 180; // 3 minutes estimate
             const calculatedProgress = Math.min((elapsed / estimatedTotal) * 95, 95);
             setEstimatedProgress(calculatedProgress);
-            
+
             const remaining = Math.max(estimatedTotal - elapsed, 0);
-            setEstimatedTimeRemaining(remaining > 0 ? remaining : null);
+            setEstimateBase(remaining > 0 ? { value: remaining, at: Date.now() } : null);
           }
 
           if (statusData.status === 'completed') {
@@ -266,6 +370,7 @@ const ProcessPage: React.FC = () => {
             setIsProcessing(false);
             setEstimatedProgress(100);
             setEstimatedTimeRemaining(0);
+            setEstimateBase(null);
           } else if (statusData.status === 'failed') {
             clearInterval(pollingRef.current!);
             pollingRef.current = null;
@@ -300,10 +405,13 @@ const ProcessPage: React.FC = () => {
     setProcessResult(null);
     
     // Reset progress tracking
+    processingStartTimeRef.current = null;
     setProcessingStartTime(null);
     setEstimatedProgress(0);
     setEstimatedTimeRemaining(null);
     setElapsedTime(0);
+    setServerQuestionCount(null);
+    setEstimateBase(null);
   };
 
   return (
@@ -431,7 +539,7 @@ const ProcessPage: React.FC = () => {
                   progress={estimatedProgress}
                   timeRemaining={estimatedTimeRemaining}
                   statusMessage={statusMessage}
-                  questionCount={uploadData?.totalQuestions}
+                  questionCount={serverQuestionCount ?? uploadData?.totalQuestions}
                   elapsedTime={elapsedTime}
                 />
               )}
